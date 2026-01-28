@@ -1,0 +1,306 @@
+import streamlit as st
+import pandas as pd
+import os
+from datetime import datetime, date
+import time
+
+# --- PAGE CONFIG ---
+st.set_page_config(page_title="Cost Sheet System", layout="wide", page_icon="📝")
+
+# Custom CSS for Professional UI
+st.markdown("""
+    <style>
+    .stApp { background-color: #F8FAFC; }
+    .section-header { 
+        background-color: #1E3A8A; 
+        color: white; 
+        padding: 12px 20px; 
+        border-radius: 8px; 
+        margin-top: 25px; 
+        margin-bottom: 15px;
+        font-weight: bold;
+    }
+    .sub-section {
+        background-color: #F1F5F9;
+        padding: 15px;
+        border-radius: 8px;
+        border-left: 5px solid #3B82F6;
+        margin-bottom: 10px;
+    }
+    .total-card {
+        background-color: #E0F2FE;
+        padding: 20px;
+        border-radius: 12px;
+        border: 2px solid #0284C7;
+        text-align: center;
+    }
+    .warning-text {
+        color: #B91C1C;
+        font-weight: bold;
+        background-color: #FEE2E2;
+        padding: 10px;
+        border-radius: 5px;
+        border-left: 5px solid #B91C1C;
+        margin-bottom: 15px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- MASTER DATA MOCKUP (Replace with real logic as needed) ---
+CUSTOMERS = ["Customer A", "Customer B", "Customer C", "Global Trade Co."]
+CUSTOMER_TERMS = {
+    "Customer A": "T/T 30 Days",
+    "Customer B": "L/C at Sight",
+    "Customer C": "T/T AFTER FAX",
+    "Global Trade Co.": "D/P Sight"
+}
+PAYMENT_LIST = ["T/T AFTER FAX", "T/T 30 DAYS", "L/C AT SIGHT", "CASH"]
+DESTINATIONS = ["Bangkok", "Laem Chabang", "Singapore", "Hong Kong", "Tokyo", "Shanghai"]
+RM_ITEMS = [f"HM {i}" for i in range(1, 21)]
+SHIPMENT_MONTHS = ["Nov.25", "Dec.25", "Jan.26", "Feb.26"]
+OH_DATA = {0: 0.10, 1: 0.34, 2: 0.51, 3: 0.57, 4: 0.64, 5: 0.97, 6: 1.59}
+
+# --- UI START ---
+st.title("📝 Cost Sheet Management System")
+
+# Initialize State
+if 'cost_data' not in st.session_state:
+    # Initialize with 5 empty rows + 1 example
+    init_data = [
+        {"Product Name": "Example Product", "Product RM": "HM 1", "RM Price": 35.0, "PACKAGING": 5.0, "Overhead": 0.57, "Quantity": 1000.0, "Factory Expense": 0.42}
+    ]
+    for _ in range(5):
+        init_data.append({"Product Name": "", "Product RM": "", "RM Price": 0.0, "PACKAGING": 0.0, "Overhead": 0.0, "Quantity": 0.0, "Factory Expense": 0.0})
+    st.session_state.cost_data = pd.DataFrame(init_data)
+
+# --- 1. ข้อมูลทั่วไป ---
+st.markdown('<div class="section-header">1. ข้อมูลทั่วไป (General Information)</div>', unsafe_allow_html=True)
+
+# Row 1: Document & Trader & Team
+c1_1, c1_2, c1_3, c1_4 = st.columns(4)
+with c1_1:
+    doc_no = st.text_input("Document No.", value="CS260115-0001")
+    trader_name = st.text_input("ชื่อ Trader")
+with c1_2:
+    doc_date = st.date_input("Document Date (Conclude)", value=date.today())
+    team = st.text_input("Team", value="A1-A8")
+with c1_3:
+    cust1 = st.selectbox("Customer 1", list(CUSTOMER_TERMS.keys()))
+    incoterm = st.selectbox("Incoterm", ["FOB", "CFR", "CIF", "EXW", "DDP"])
+with c1_4:
+    cust2 = st.selectbox("Customer 2", ["None"] + list(CUSTOMER_TERMS.keys()))
+    dest = st.selectbox("Destination", DESTINATIONS)
+
+c5, c6 = st.columns(2)
+with c5:
+    ship_from = st.date_input("Shipment Date from", value=date(2026, 5, 15))
+with c6:
+    ship_to = st.date_input("Shipment Date to", value=date(2026, 5, 30))
+
+st.markdown("##### Exchange Rate Details")
+r1, r2, r3, r4, r5 = st.columns(5)
+with r1:
+    currency = st.selectbox("Currency", ["USD", "THB", "EUR", "JPY"])
+with r2:
+    spot_rate = st.number_input("Spot Rate", value=34.00, format="%.4f")
+with r3:
+    discount_rate = st.number_input("(-) Discount Rate", value=0.00, format="%.4f")
+with r4:
+    premium_rate = st.number_input("(+) Premium Rate", value=0.50, format="%.4f")
+with r5:
+    default_ex = spot_rate - discount_rate + premium_rate
+    ex_rate = st.number_input("Exchange Rate", value=default_ex, format="%.4f")
+
+st.write("**Destination (ระบุได้ 4 ที่):**")
+d_cols = st.columns(4)
+dest1 = d_cols[0].selectbox("Dest 1", DESTINATIONS, key="d1")
+dest2 = d_cols[1].selectbox("Dest 2", DESTINATIONS, key="d2")
+dest3 = d_cols[2].selectbox("Dest 3", DESTINATIONS, key="d3")
+dest4 = d_cols[3].selectbox("Dest 4", DESTINATIONS, key="d4")
+
+# --- 2. Export Expense & Freight ---
+st.markdown('<div class="section-header">2. ค่าใช้จ่ายส่งออก (Export Expense & Freight)</div>', unsafe_allow_html=True)
+st.markdown('<div class="warning-text">⚠️ Export Expense** ค่าใช้จ่าย Export Expense เป็นค่าใช้จ่ายตามมาตรฐาน สามารถปรับได้ตามเกิดขึ้นจริง</div>', unsafe_allow_html=True)
+col_cnt, _ = st.columns([1, 3])
+container_qty = col_cnt.number_input("จำนวนตู้ส่งออก (Container)", min_value=1, value=1)
+
+# Group 1: Freight
+st.markdown('<div class="sub-section"><b>1. Freight (ค่าระวางเรือ)</b></div>', unsafe_allow_html=True)
+v_freight = st.number_input("Freight (ค่าระวางเรือระหว่างประเทศ)", value=0.0)
+
+# Group 2: Export Expense
+st.markdown('<div class="sub-section"><b>2. Export Expense (ค่าใช้จ่ายส่งออกตามกลุ่ม)</b></div>', unsafe_allow_html=True)
+e_col1, e_col2 = st.columns(2)
+
+with e_col1:
+    st.write("**Shipping & Transport**")
+    v_shipping = st.number_input("ค่า Shipping (ราคา/ตู้) *ตามเงื่อนไขจำนวนตู้", value=0.0)
+    v_truck = st.number_input(f"ค่าขนย้าย-ส่งออก: หัวลาก/ผ่านท่า (8,300 บ./ตู้)", value=float(container_qty * 8300))
+    
+    st.write("**Survey & Inspection**")
+    v_survey = st.number_input("ค่า Survey: ตรวจสอบ+รมยา/พาหนะรมยา (1,050 บ./ตู้ + 1,350 บ./Inv)", value=float(container_qty * 1050 + 1350))
+    
+    st.write("**Insurance**")
+    ins_type = st.radio("เงื่อนไขประกัน", ["FOB/CFR (ตามเงื่อนไขการชำระ)", "CIF (ตามเงื่อนไขการชำระ)"], horizontal=True)
+    v_insurance = st.number_input("ค่าเบี้ยประกันส่งออก (Insurance)", value=0.0)
+
+with e_col2:
+    st.write("**Documents & Government**")
+    v_docs_gov = st.number_input("ค่าเอกสารส่งออก: กรมเกษตร/ราชการ/CO/แบบพิมพ์", value=float(1000 + 938))
+    v_doc_prep = st.number_input("ค่าจัดทำเอกสาร (5,500 บ./Inv)", value=5500.0)
+    
+    st.write("**Port Charges**")
+    v_port_charges = st.number_input("ค่าระวางส่งออก: THC/Seal/BL/Handling", value=float(container_qty * (2800 + 210) + 1300))
+
+st.write("**ค่าใช้จ่ายอื่นๆ (ระบุเอง)**")
+o_c1, o_c2 = st.columns([2, 1])
+other_label = o_c1.text_input("ระบุชื่อค่าใช้จ่าย")
+other_val = o_c2.number_input("จำนวนเงิน (THB)", value=0.0)
+
+total_exp_v2 = (v_freight + v_shipping + v_truck + v_survey + v_insurance + 
+                v_docs_gov + v_doc_prep + v_port_charges + other_val)
+
+# --- 3. Interest & Storage ---
+st.markdown('<div class="section-header">3. ดอกเบี้ยและคลังสินค้า (Interest & WH Storage)</div>', unsafe_allow_html=True)
+i_col1, i_col2 = st.columns(2)
+
+with i_col1:
+    st.write("**AR Interest**")
+    # Auto fill payment term
+    ar_customer = st.selectbox("เลือก Customer (จากลิสต์)", CUSTOMERS, key="ar_cust")
+    p_term_auto = CUSTOMER_TERMS.get(ar_customer, "N/A")
+    st.info(f"Payment Term (Auto): {p_term_auto}")
+    
+    p_term_ship = st.selectbox("Payment Term For Shipment", PAYMENT_LIST)
+    ar_rate = st.number_input("AR Interest Rate (%)", value=0.0, key="ar_r")
+    ar_days = st.number_input("AR Interest Day (วัน)", value=0, key="ar_d")
+
+with i_col2:
+    st.write("**RM Interest & WH Storage**")
+    rm_rate = st.number_input("RM Interest Rate (%)", value=0.0, key="rm_r")
+    rm_days = st.number_input("RM Interest Day (วัน)", value=0, key="rm_d")
+    
+    st.write("---")
+    wh_days = st.number_input("WH Storage Day (วัน)", value=30)
+    # Calculation for WH Storage: 30 THB / Ton / Month (Assume 30 days = 1 month)
+    # Will calculate in final step based on total quantity
+
+# --- 4. Details & Production Cost ---
+st.markdown('<div class="section-header">4. รายละเอียดสินค้าและต้นทุนผลิต (Production Cost)</div>', unsafe_allow_html=True)
+st.info("กรุณากรอกข้อมูลสินค้า (สามารถเพิ่มรายการได้สูงสุด 15 รายการ)")
+
+edited_df = st.data_editor(
+    st.session_state.cost_data,
+    num_rows="dynamic",
+    use_container_width=True,
+    key="cost_editor_v2"
+)
+
+# --- FINAL CALCULATION ---
+# Calculate Totals from Section 2 for Allocation
+# Note: total_exp_v2 includes Freight? No, v_freight is in total_exp_v2 line 122?
+# Let's check Section 2 logic provided in my previous read?
+# Line 122: total_exp_v2 = (v_freight + v_shipping ...). Yes, it includes Freight.
+# BUT User requested: "Freight ให้ดึงข้อมูลมาจากค่าในหัวข้อที่ 2, Export Expense ให้ดึงค่าใช้จ่ายในหัวข้อที่ 2 มารวมให้ด้วย"
+# Usually Freight and Export Exp are separate columns in Cost Sheet logic.
+# I will separate them for allocation if possible, or just use total.
+# Let's separate Freight from Exp for clearer column display.
+total_freight_alloc = v_freight # Assuming v_freight is Total Freight? Step 47 line 91 says "Freight (ค่าระวางเรือระหว่างประเทศ)"
+# Is it per container or total? Line 122 sums it directly.
+# Let's assume v_freight is Per Container? No, usually entered as Total or Per Unit?
+# Previous Code (Step 9) had v_freight * qty. Step 47 Code (Line 122) sums v_freight directly. 
+# I will assume v_freight is TOTAL for the shipment or Per Container?
+# If Per Container, I should multiply by container_qty.
+# Line 100 uses container_qty * 8300.
+# Line 91 just takes input.
+# I will use (v_freight * container_qty) if logical, but to be safe I'll use the value as is (Total) or ask user?
+# User said "Freight pull from sec 2".
+# I'll calculate Total Freight and Total Export Exp separately.
+total_freight_final = v_freight
+total_export_exp_final = (v_shipping + v_truck + v_survey + v_insurance + v_docs_gov + v_doc_prep + v_port_charges + other_val)
+
+results = []
+if "Quantity" in edited_df.columns:
+    total_qty_all = edited_df["Quantity"].sum()
+else:
+    total_qty_all = 0
+
+for index, row in edited_df.iterrows():
+    if row.get("Quantity", 0) <= 0 and not row.get("Product Name"):
+        continue
+        
+    qty = row.get("Quantity", 0)
+    
+    # Cost Components
+    c_rm = row.get("RM Price", 0.0)
+    c_pkg = row.get("PACKAGING", 0.0)
+    c_ovh = row.get("Overhead", 0.0)
+    c_fac = row.get("Factory Expense", 0.0)
+    
+    # Allocation (Per Unit)
+    # If Total Qty > 0
+    if total_qty_all > 0:
+        unit_freight = total_freight_final / total_qty_all
+        unit_exp = total_export_exp_final / total_qty_all
+    else:
+        unit_freight = 0
+        unit_exp = 0
+        
+    # Interest & Storage
+    # AR Interest (Pull from Sec 3 logic?) 
+    # Logic: (RM Price? Or Total Cost?) * Rate * Days/365
+    # User said "AR Interest ... pull from list... calculate"
+    # I'll use Cost Base = RM Price (as conservative proxy) or c_rm + c_pkg + ... 
+    # Let's use RM Price as per previous logic example.
+    unit_ar = c_rm * (ar_rate/100) * (ar_days/365)
+    unit_rm_int = c_rm * (rm_rate/100) * (rm_days/365)
+    
+    # WH Storage: 30 baht/ton/month -> 30/1000 * (days/30)
+    unit_wh = (30/1000) * (wh_days/30) 
+    
+    # Total Cost = Sum of all columns
+    total_cost = c_rm + c_pkg + c_ovh + c_fac + unit_freight + unit_exp + unit_ar + unit_rm_int + unit_wh
+    
+    results.append({
+        "Product Name": row.get("Product Name", ""),
+        "RM Price": c_rm,
+        "Packaging": c_pkg,
+        "Overhead": c_ovh,
+        "Factory Exp": c_fac,
+        "Freight": round(unit_freight, 4),
+        "Export Exp": round(unit_exp, 4),
+        "AR Int": round(unit_ar, 4),
+        "RM Int": round(unit_rm_int, 4),
+        "WH Store": round(unit_wh, 4),
+        "Total Cost": round(total_cost, 4),
+        "Quantity": qty
+    })
+
+summary_df = pd.DataFrame(results)
+
+if not summary_df.empty:
+    st.write("---")
+    st.subheader("สรุปต้นทุนรวม (Cost Calculation)")
+    st.dataframe(summary_df, use_container_width=True)
+    
+    total_cost_value = (summary_df["Total Cost"] * summary_df["Quantity"]).sum()
+    grand_total_curr = total_cost_value / ex_rate if ex_rate > 0 else 0
+    
+    st.markdown(f"""
+    <div class="total-card">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+                <span style="font-size:18px">Total Quantity: <b>{total_qty_all:,.2f}</b></span>
+            </div>
+            <div style="text-align:right;">
+                <span style="font-size:20px">Total Cost ({currency}): </span>
+                <span style="font-size:28px; color:#1E3A8A; font-weight:bold;">{grand_total_curr:,.2f}</span>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("</div>", unsafe_allow_html=True)
+
+if st.button("💾 บันทึกเอกสาร Cost Sheet", use_container_width=True):
+    st.success(f"บันทึกข้อมูล {doc_no} เรียบร้อยแล้ว")

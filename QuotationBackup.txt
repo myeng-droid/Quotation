@@ -1,0 +1,438 @@
+import streamlit as st
+import pandas as pd
+import os
+from datetime import datetime
+import yfinance as yf
+import time
+
+# --- PAGE CONFIG & THEME ---
+st.set_page_config(page_title="Quotation Management", layout="wide", page_icon="🚢")
+
+# Custom CSS for Blue/White Theme
+st.markdown("""
+    <style>
+    /* Main Background & Text */
+    .stApp {
+        background-color: #F0F4F8;
+        color: #0E1117;
+    }
+    
+    /* Headers - Blue Theme */
+    h1, h2, h3, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
+        color: #003366 !important; /* Navy Blue */
+    }
+    
+    /* Buttons */
+    div.stButton > button:first-child {
+        background-color: #004080; /* Blue */
+        color: white;
+        border: none;
+        border-radius: 5px;
+    }
+    div.stButton > button:first-child:hover {
+        background-color: #0059b3; /* Lighter Blue */
+        color: white;
+    }
+    
+    /* Metrics */
+    [data-testid="stMetricValue"] {
+        color: #003366;
+    }
+    
+    /* Tabs */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 24px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        white-space: pre-wrap;
+        background-color: white;
+        border-radius: 4px 4px 0px 0px;
+        gap: 1px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        color: #003366;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #003366 !important;
+        color: white !important;
+    }
+    
+    /* Divider */
+    hr {
+        border-color: #003366;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- CONFIGURATION (ตั้งค่าระบบ) ---
+REAL_PATH = 'D:/Quotation'
+TEST_PATH = '.' 
+
+if os.path.exists(REAL_PATH):
+    BASE_PATH = REAL_PATH
+else:
+    BASE_PATH = TEST_PATH
+    if not os.path.exists(BASE_PATH):
+        os.makedirs(BASE_PATH)
+
+FILE_NAME = 'Quotation.xlsx'
+FULL_FILE_PATH = os.path.join(BASE_PATH, FILE_NAME)
+SHEET_NAME = 'Quotation'
+TABLE_NAME = 'QTDB'
+
+# --- INITIALIZE SESSION STATE ---
+default_values = {
+    'product_name': '',
+    'currency': None,
+    'spot_rate': 0.0,
+    'discount_rate': 0.0,
+    'premium_rate': 0.0,
+    'shipment_date': None,
+    'quantity': 0.0,
+    'product_rm': None,
+    'group_id': None,
+    'container_qty': 0
+}
+
+for key, value in default_values.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
+
+# --- MOCK MASTER DATA (UPDATED FROM ATTACHED FILES) ---
+def get_master_data():
+    # 1. Currency (Expanded List)
+    currency_data = {
+        'Currency': ['USD', 'EUR', 'JPY', 'GBP', 'AUD', 'CAD', 'CHF', 'CNY', 'HKD', 'NZD', 'SGD', 'THB'],
+        'Name': [
+            'US Dollar', 'Euro', 'Japanese Yen', 'British Pound', 
+            'Australian Dollar', 'Canadian Dollar', 'Swiss Franc', 'Chinese Yuan',
+            'Hong Kong Dollar', 'New Zealand Dollar', 'Singapore Dollar', 'Thai Baht'
+        ]
+    }
+    df_currency = pd.DataFrame(currency_data)
+
+    # 2. Raw Material Price (Updated with more HMs from file snippet)
+    # Note: Creating a more comprehensive list based on the snippet pattern
+    products = [
+        'HM 1', 'HM 2', 'HM 3', 'HM 4', 'HM 4 (New)', 'HM 6', 
+        'HM 7', 'HM 8', 'HM 9', 'HM 10', 'H 12', 'H 16', 'H 17', 'H 18', 'H 19'
+    ]
+    dates = ['Nov.25', 'Dec.25', 'Jan.26', 'Feb.26']
+    
+    # Mocking prices logic based on snippets (avg ranges 29-36)
+    data_rows = []
+    import random
+    # Fixed known values from snippet
+    known_prices = {
+        ('HM 4', 'Dec.25'): 33.38, ('HM 4 (New)', 'Dec.25'): 29.33,
+        ('HM 6', 'Dec.25'): 35.63, ('HM 6', 'Jan.26'): 34.93,
+        ('H 18', 'Jan.26'): 29.33, ('HM 1', 'Nov.25'): 35.33
+    }
+    
+    for p in products:
+        for d in dates:
+            price = known_prices.get((p, d), round(random.uniform(32.0, 36.5), 2))
+            data_rows.append({'Product': p, 'MonthYear': d, 'Price': price})
+            
+    df_rm = pd.DataFrame(data_rows)
+
+    # 3. Overhead (Groups 0-6)
+    oh_data = {
+        'Group': [0, 1, 2, 3, 4, 5, 6],
+        'Overhead': [0.1, 0.34, 0.51, 0.57, 0.64, 0.97, 1.59]
+    }
+    df_oh = pd.DataFrame(oh_data)
+
+    # 4. Expenses (Updated with new items from file)
+    expenses_rates = {
+        'trucking': 8300,        # ค่าหัวลาก (ต่อตู้)
+        'inspection_fumigation': 1050, # ค่าตรวจสอบ+รมยา (ต่อตู้)
+        'thc': 2800,             # THC (ต่อตู้)
+        'seal': 210,             # Seal (ต่อตู้) - NEW
+        
+        'transport_fumigation': 1350, # ค่าพาหนะไปรมยา (ต่อ Inv)
+        'agri_transport': 1000,       # ค่าพาหนะ จนท.เกษตร (ต่อ Inv)
+        'docs_others': 938,           # เอกสาร/อื่นๆ (ต่อ Inv)
+        'bl_fee': 1300,               # B/L (ต่อ Inv) - NEW
+        'doc_prep': 5500,             # ค่าจัดทำเอกสาร (ต่อ Inv) - NEW
+        
+        'factory_expense': 0.42       # Factory Expense (ต่อ kg)
+    }
+
+    return df_currency, df_rm, df_oh, expenses_rates
+
+df_currency, df_rm, df_oh, expenses_rates = get_master_data()
+
+# --- HELPER FUNCTIONS ---
+def get_exchange_rate(currency_code):
+    if not currency_code: return 0.0
+    if currency_code == 'THB': return 1.0
+    try:
+        ticker = f"{currency_code}THB=X" 
+        data = yf.Ticker(ticker)
+        hist = data.history(period="1d")
+        if not hist.empty:
+            return round(hist['Close'].iloc[-1], 4)
+        return 0.0
+    except Exception:
+        return 0.0
+
+def generate_doc_no(df_db):
+    now = datetime.now()
+    prefix = f"CS{now.strftime('%y%m')}"
+    if df_db is None or df_db.empty:
+        return f"{prefix}-0001"
+    current_month_docs = df_db[df_db['document no.'].astype(str).str.startswith(prefix)]
+    if current_month_docs.empty:
+        return f"{prefix}-0001"
+    try:
+        last_doc = current_month_docs['document no.'].iloc[-1]
+        last_run = int(last_doc.split('-')[1])
+        new_run = last_run + 1
+        return f"{prefix}-{new_run:04d}"
+    except:
+        return f"{prefix}-0001"
+
+def load_database():
+    if os.path.exists(FULL_FILE_PATH):
+        try:
+            return pd.read_excel(FULL_FILE_PATH, sheet_name=SHEET_NAME)
+        except Exception:
+            return pd.DataFrame()
+    else:
+        # Updated columns to include new cost breakdown if needed
+        columns = [
+            'document no.', 'document date', 'Product name', 'currency', 
+            'Spot rate', 'discount rate', 'premium rate', 'exchange rate',
+            'Shipment Date', 'Quantity (Ton)', 'Product RM', 'ราคา RM', 
+            'Group', 'Overhead', 'Factory Expense', 'จำนวนตู้ส่งออก', 
+            'ค่าหัวลาก', 'ค่าตรวจสอบ+รมยา', 'THC', 'Seal',
+            'ค่าพาหนะไปรมยา', 'ค่าพาหนะจนท.เกษตร', 'B/L', 'ค่าจัดทำเอกสาร', 'เอกสาร/อื่นๆ', 
+            'Total Cost (THB)'
+        ]
+        return pd.DataFrame(columns=columns)
+
+def save_database(df):
+    try:
+        with pd.ExcelWriter(FULL_FILE_PATH, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name=SHEET_NAME, index=False)
+        return True
+    except Exception as e:
+        st.error(f"ไม่สามารถบันทึกไฟล์ได้: {e}")
+        return False
+
+def clear_form():
+    for key, value in default_values.items():
+        st.session_state[key] = value
+
+# --- UI Application ---
+
+st.title("🚢 Quotation Generator System")
+st.markdown(f"<span style='color:gray'>Storage Path: {FULL_FILE_PATH}</span>", unsafe_allow_html=True)
+
+tab1, tab2 = st.tabs(["📝 สร้าง Quotation (Add)", "📋 จัดการข้อมูล (Edit/Delete)"])
+
+df_db = load_database()
+
+with tab1:
+    st.markdown("### Input Data")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    # 1. Document Info
+    with col1:
+        st.markdown("##### 1. ข้อมูลเอกสาร")
+        new_doc_no = generate_doc_no(df_db)
+        st.text_input("Document No.", value=new_doc_no, disabled=True)
+        doc_date = st.date_input("Document Date", value=datetime.now())
+        st.text_input("Product Name", key='product_name', placeholder="ระบุชื่อสินค้า...")
+    
+    # 2. Currency & Exchange Rate
+    with col2:
+        st.markdown("##### 2. สกุลเงิน & อัตราแลกเปลี่ยน")
+        
+        currency_list = df_currency['Currency'].tolist()
+        selected_currency = st.selectbox(
+            "Currency", currency_list, index=None, placeholder="Select Currency...", key='currency'
+        )
+        
+        if st.button("🔄 Get Rate & Recalculate"):
+            if st.session_state.currency:
+                new_rate = get_exchange_rate(st.session_state.currency)
+                st.session_state.spot_rate = new_rate
+                st.success(f"Rate Updated: {new_rate}")
+            else:
+                st.warning("Please select currency first.")
+
+        spot_rate = st.number_input("Spot Rate", key='spot_rate', format="%.4f")
+        discount_rate = st.number_input("Discount Rate", key='discount_rate', format="%.4f")
+        premium_rate = st.number_input("Premium Rate", key='premium_rate', format="%.4f")
+        
+        exchange_rate = spot_rate - discount_rate + premium_rate
+        st.metric("Exchange Rate (Net)", f"{exchange_rate:.4f}")
+
+    # 3. Product & Cost Logic
+    with col3:
+        st.markdown("##### 3. สินค้าและต้นทุน")
+        shipment_options = sorted(list(set(df_rm['MonthYear'].tolist())), reverse=True) # Sort to show recent/future first
+        shipment_date = st.selectbox(
+            "Shipment Date", shipment_options, index=None, placeholder="Select Date...", key='shipment_date'
+        )
+        
+        quantity = st.number_input("Quantity (Ton)", min_value=0.0, step=1.0, key='quantity')
+        
+        rm_list = sorted(list(set(df_rm['Product'].tolist())))
+        selected_rm = st.selectbox(
+            "Product RM", rm_list, index=None, placeholder="Select RM...", key='product_rm'
+        )
+        
+        rm_price = 0.0
+        if selected_rm and shipment_date:
+            found_rm = df_rm[(df_rm['Product'] == selected_rm) & (df_rm['MonthYear'] == shipment_date)]
+            if not found_rm.empty:
+                rm_price = found_rm['Price'].values[0]
+        
+        st.number_input("ราคา RM (Auto Lookup)", value=rm_price, disabled=True)
+
+    st.markdown("---")
+    
+    col4, col5 = st.columns(2)
+    
+    with col4:
+        st.markdown("##### 4. Overhead & Factory Expense")
+        group_id = st.selectbox(
+            "Group (0-6)", df_oh['Group'].tolist(), index=None, placeholder="Select Group...", key='group_id'
+        )
+        
+        overhead_cost = 0.0
+        if group_id is not None:
+            found_oh = df_oh[df_oh['Group'] == group_id]
+            if not found_oh.empty:
+                overhead_cost = found_oh['Overhead'].values[0]
+        
+        st.write(f"Overhead: **{overhead_cost}**")
+        
+        factory_exp = expenses_rates['factory_expense']
+        st.write(f"Factory Expense: **{factory_exp}**")
+
+    with col5:
+        st.markdown("##### 5. ค่าใช้จ่ายส่งออก (Logistics)")
+        container_qty = st.number_input("จำนวนตู้ส่งออก", min_value=0, step=1, key='container_qty')
+        
+        # --- Calculations (Realtime) ---
+        # Per Container Costs
+        cost_trucking = container_qty * expenses_rates['trucking']
+        cost_insp_fum = container_qty * expenses_rates['inspection_fumigation']
+        cost_thc = container_qty * expenses_rates['thc']
+        cost_seal = container_qty * expenses_rates['seal']
+        
+        # Per Invoice Costs (Fixed per shipment if container > 0)
+        has_shipment = 1 if container_qty > 0 else 0
+        cost_trans_fum = expenses_rates['transport_fumigation'] * has_shipment
+        cost_agri = expenses_rates['agri_transport'] * has_shipment
+        cost_docs = expenses_rates['docs_others'] * has_shipment
+        cost_bl = expenses_rates['bl_fee'] * has_shipment
+        cost_prep = expenses_rates['doc_prep'] * has_shipment
+        
+        # Display Breakdown
+        c_l, c_r = st.columns(2)
+        with c_l:
+            st.caption("Per Container Basis")
+            st.write(f"ค่าหัวลาก: {cost_trucking:,.2f}")
+            st.write(f"ตรวจสอบ+รมยา: {cost_insp_fum:,.2f}")
+            st.write(f"THC: {cost_thc:,.2f}")
+            st.write(f"Seal: {cost_seal:,.2f}")
+        with c_r:
+            st.caption("Per Invoice Basis")
+            st.write(f"พาหนะรมยา: {cost_trans_fum:,.2f}")
+            st.write(f"พาหนะเกษตร: {cost_agri:,.2f}")
+            st.write(f"B/L: {cost_bl:,.2f}")
+            st.write(f"จัดทำเอกสาร: {cost_prep:,.2f}")
+            st.write(f"อื่นๆ: {cost_docs:,.2f}")
+
+    # --- Save Button ---
+    st.markdown("---")
+    col_save_l, col_save_r = st.columns([1, 4])
+    with col_save_l:
+        save_clicked = st.button("💾 บันทึกข้อมูล (Save)", type="primary", use_container_width=True)
+    
+    if save_clicked:
+        if not st.session_state.product_name or not st.session_state.currency:
+            st.error("กรุณากรอกข้อมูลสำคัญให้ครบ (Product Name, Currency)")
+        else:
+            # Total Cost Logic
+            # (Price RM * Qty * 1000) + (OH * Qty * 1000) + (FacExp * Qty * 1000) + All Logistics
+            raw_mat_total = (rm_price + overhead_cost + factory_exp) * st.session_state.quantity * 1000
+            logistics_total = (
+                cost_trucking + cost_insp_fum + cost_thc + cost_seal +
+                cost_trans_fum + cost_agri + cost_docs + cost_bl + cost_prep
+            )
+            
+            new_data = {
+                'document no.': new_doc_no,
+                'document date': doc_date,
+                'Product name': st.session_state.product_name,
+                'currency': st.session_state.currency,
+                'Spot rate': st.session_state.spot_rate,
+                'discount rate': st.session_state.discount_rate,
+                'premium rate': st.session_state.premium_rate,
+                'exchange rate': exchange_rate,
+                'Shipment Date': st.session_state.shipment_date,
+                'Quantity (Ton)': st.session_state.quantity,
+                'Product RM': st.session_state.product_rm,
+                'ราคา RM': rm_price,
+                'Group': st.session_state.group_id,
+                'Overhead': overhead_cost,
+                'Factory Expense': factory_exp,
+                'จำนวนตู้ส่งออก': container_qty,
+                'ค่าหัวลาก': cost_trucking,
+                'ค่าตรวจสอบ+รมยา': cost_insp_fum,
+                'THC': cost_thc,
+                'Seal': cost_seal,
+                'ค่าพาหนะไปรมยา': cost_trans_fum,
+                'ค่าพาหนะจนท.เกษตร': cost_agri,
+                'B/L': cost_bl,
+                'ค่าจัดทำเอกสาร': cost_prep,
+                'เอกสาร/อื่นๆ': cost_docs,
+                'Total Cost (THB)': raw_mat_total + logistics_total
+            }
+            
+            df_new_row = pd.DataFrame([new_data])
+            df_db = pd.concat([df_db, df_new_row], ignore_index=True)
+            
+            if save_database(df_db):
+                st.success(f"บันทึกข้อมูล {new_doc_no} เรียบร้อยแล้ว!")
+                clear_form()
+                time.sleep(1)
+                st.rerun()
+
+with tab2:
+    st.markdown("### Database Management")
+    if df_db.empty:
+        st.info("ยังไม่มีข้อมูลในระบบ")
+    else:
+        edited_df = st.data_editor(
+            df_db,
+            num_rows="dynamic",
+            use_container_width=True,
+            key="data_editor"
+        )
+        
+        col_btn1, col_btn2 = st.columns([1,5])
+        with col_btn1:
+            if st.button("💾 บันทึกการแก้ไขทั้งหมด"):
+                if save_database(edited_df):
+                    st.success("อัพเดทฐานข้อมูลเรียบร้อย")
+                    st.rerun()
+        
+        with open(FULL_FILE_PATH, "rb") as file:
+            btn = st.download_button(
+                    label="📥 Download Excel File",
+                    data=file,
+                    file_name=FILE_NAME,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+
+st.markdown("---")
+st.caption(f"System Path: {BASE_PATH} | File: {FILE_NAME} | Table: {TABLE_NAME}")
