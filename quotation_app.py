@@ -133,13 +133,89 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- MASTER DATA MOCKUP (Replace with real logic as needed) ---
-CUSTOMERS = ["Customer A", "Customer B", "Customer C", "Global Trade Co."]
-CUSTOMER_TERMS = {
-    "Customer A": "T/T 30 Days",
-    "Customer B": "L/C at Sight",
-    "Customer C": "T/T AFTER FAX",
-    "Global Trade Co.": "D/P Sight"
-}
+@st.cache_data
+def load_customer_data():
+    """Load customer data from Master/Master Customer.xlsx"""
+    try:
+        file_path = "Master/Master Customer.xlsx"
+        if os.path.exists(file_path):
+            df = pd.read_excel(file_path)
+            # Ensure required columns exist
+            required = ['CUSTOMER_CODE', 'CUSTOMER_NAME']
+            if all(col in df.columns for col in required):
+                # Sort by CUSTOMER_NAME
+                df = df.sort_values('CUSTOMER_NAME')
+                # Create display format [CODE] NAME
+                df['Display'] = df.apply(lambda x: f"[{x['CUSTOMER_CODE']}] {x['CUSTOMER_NAME']}", axis=1)
+                
+                # Fetch payment terms if available
+                term_col = 'DEFAULT_PAY_TERM_DESC' if 'DEFAULT_PAY_TERM_DESC' in df.columns else ('PAY_TERM_DESC' if 'PAY_TERM_DESC' in df.columns else None)
+                if term_col:
+                    return df[['CUSTOMER_CODE', 'CUSTOMER_NAME', 'Display', term_col]].rename(columns={term_col: 'Term'})
+                else:
+                    df['Term'] = "N/A"
+                    return df[['CUSTOMER_CODE', 'CUSTOMER_NAME', 'Display', 'Term']]
+        return pd.DataFrame(columns=['CUSTOMER_CODE', 'CUSTOMER_NAME', 'Display', 'Term'])
+    except Exception as e:
+        st.error(f"Error loading customer data: {e}")
+        return pd.DataFrame(columns=['CUSTOMER_CODE', 'CUSTOMER_NAME', 'Display', 'Term'])
+
+@st.cache_data
+def load_currency_data():
+    """Load currency data from Master/MasterCurrency.xlsx"""
+    try:
+        file_path = "Master/MasterCurrency.xlsx"
+        if os.path.exists(file_path):
+            df = pd.read_excel(file_path)
+            # Use the column 'รหัส (Code)' as the currency code
+            code_col = 'รหัส (Code)'
+            if code_col in df.columns:
+                # Get unique codes, drop NaNs, and sort alphabetically
+                codes = df[code_col].dropna().unique().tolist()
+                codes.sort()
+                return codes
+        return ["USD", "THB", "EUR", "JPY"] # Fallback
+    except Exception as e:
+        st.error(f"Error loading currency data: {e}")
+        return ["USD", "THB", "EUR", "JPY"]
+
+@st.cache_data
+def load_port_data():
+    """Load port data from Master/Master Port.csv"""
+    try:
+        file_path = "Master/Master Port.csv"
+        if os.path.exists(file_path):
+            # Using encoding utf-8-sig to handle BOM and low_memory=False for consistency
+            df = pd.read_csv(file_path, encoding='utf-8-sig', low_memory=False)
+            required = ['Country Code', 'Main Port Name']
+            if all(col in df.columns for col in required):
+                # Filter out rows with missing port names
+                df = df.dropna(subset=['Main Port Name'])
+                # Sort by Main Port Name
+                df = df.sort_values('Main Port Name')
+                # Create display format [Country Code] Main Port Name
+                df['Display'] = df.apply(lambda x: f"[{x['Country Code']}] {x['Main Port Name']}", axis=1)
+                return df[['Country Code', 'Main Port Name', 'Display']]
+        return pd.DataFrame(columns=['Country Code', 'Main Port Name', 'Display'])
+    except Exception as e:
+        st.error(f"Error loading port data: {e}")
+        return pd.DataFrame(columns=['Country Code', 'Main Port Name', 'Display'])
+
+# Load customer data
+CUSTOMER_DF = load_customer_data()
+CUSTOMER_LIST = CUSTOMER_DF['Display'].tolist()
+CUSTOMER_MAP = dict(zip(CUSTOMER_DF['Display'], CUSTOMER_DF['CUSTOMER_CODE']))
+CUSTOMER_TERMS_MAP = dict(zip(CUSTOMER_DF['Display'], CUSTOMER_DF['Term']))
+
+CURRENCY_LIST = load_currency_data()
+
+# Load port data
+PORT_DF = load_port_data()
+PORT_DISPLAY_LIST = PORT_DF['Display'].tolist()
+PORT_MAP = dict(zip(PORT_DF['Display'], PORT_DF['Main Port Name']))
+
+CUSTOMERS = CUSTOMER_LIST # For backward compatibility in other parts if needed
+
 PAYMENT_LIST = ["T/T AFTER FAX", "T/T 30 DAYS", "L/C AT SIGHT", "CASH"]
 DESTINATIONS = ["Bangkok", "Laem Chabang", "Singapore", "Hong Kong", "Tokyo", "Shanghai"]
 RM_ITEMS = [f"HM {i}" for i in range(1, 21)]
@@ -206,12 +282,14 @@ with c1_1:
     trader_name = st.text_input("ชื่อ Trader")
 with c1_2:
     doc_date = st.date_input("Document Date (Conclude)", value=date.today())
-    team = st.selectbox("Team", ["1", "2", "3", "4", "5", "6", "7", "8"])
+    team = st.selectbox("Team", ["A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8"])
 with c1_3:
-    cust1 = st.selectbox("Customer1 (Importer)", list(CUSTOMER_TERMS.keys()))
+    cust1_display = st.selectbox("Customer1 (Importer)", CUSTOMER_LIST)
+    cust1 = CUSTOMER_MAP.get(cust1_display, "")
     incoterm = st.selectbox("Incoterm", ["FOB", "CFR", "CIF", "EXW", "DDP"])
 with c1_4:
-    cust2 = st.text_input("Customer 2 (End Customer)")
+    cust2_display = st.selectbox("Customer 2 (End Customer)", [""] + CUSTOMER_LIST)
+    cust2 = CUSTOMER_MAP.get(cust2_display, "")
 
 c5, c6 = st.columns(2)
 with c5:
@@ -222,7 +300,7 @@ with c6:
 st.markdown("##### Exchange Rate Details")
 r1, r2, r3, r4, r5 = st.columns([1.5, 1.5, 1.5, 1.5, 1.5]) 
 with r1:
-    currency = st.selectbox("Currency", ["USD", "THB", "EUR", "JPY"])
+    currency = st.selectbox("Currency", CURRENCY_LIST)
 
 # Helper to fetch rate
 def get_yahoo_rate(pair="THB=X"):
@@ -264,13 +342,17 @@ with r5:
 st.markdown("##### Destination")
 dest_col1, dest_col2, dest_col3, dest_col4 = st.columns(4)
 with dest_col1:
-    destination1 = st.selectbox("Destination 1", [""] + DESTINATIONS, key="dest1")
+    dest1_display = st.selectbox("Destination 1", [""] + PORT_DISPLAY_LIST, key="dest1_sel")
+    destination1 = PORT_MAP.get(dest1_display, "")
 with dest_col2:
-    destination2 = st.selectbox("Destination 2", [""] + DESTINATIONS, key="dest2")
+    dest2_display = st.selectbox("Destination 2", [""] + PORT_DISPLAY_LIST, key="dest2_sel")
+    destination2 = PORT_MAP.get(dest2_display, "")
 with dest_col3:
-    destination3 = st.selectbox("Destination 3", [""] + DESTINATIONS, key="dest3")
+    dest3_display = st.selectbox("Destination 3", [""] + PORT_DISPLAY_LIST, key="dest3_sel")
+    destination3 = PORT_MAP.get(dest3_display, "")
 with dest_col4:
-    destination4 = st.selectbox("Destination 4", [""] + DESTINATIONS, key="dest4")
+    dest4_display = st.selectbox("Destination 4", [""] + PORT_DISPLAY_LIST, key="dest4_sel")
+    destination4 = PORT_MAP.get(dest4_display, "")
 
 # --- 2. Export Expense & Freight ---
 st.markdown('<div class="section-header">2. ค่าใช้จ่ายส่งออก (Export Expense & Freight)</div>', unsafe_allow_html=True)
@@ -377,8 +459,10 @@ i_col1, i_col2 = st.columns(2)
 with i_col1:
     st.write("**AR Interest**")
     # Auto fill payment term
-    ar_customer = st.selectbox("เลือก Customer (จากลิสต์)", CUSTOMERS, key="ar_cust")
-    p_term_auto = CUSTOMER_TERMS.get(ar_customer, "N/A")
+    # AR Interest calculation usually needs a customer lookup
+    ar_customer_display = st.selectbox("เลือก Customer (จากลิสต์)", CUSTOMER_LIST, key="ar_cust")
+    ar_customer_code = CUSTOMER_MAP.get(ar_customer_display, "")
+    p_term_auto = CUSTOMER_TERMS_MAP.get(ar_customer_display, "N/A")
     st.info(f"Payment Term (Auto): {p_term_auto}")
     
     p_term_ship = st.selectbox("Payment Term For Shipment", PAYMENT_LIST)
@@ -419,6 +503,8 @@ if 'cost_data_v3' not in st.session_state:
             "Product RM": "",
             "ราคา RM": 0.0,
             "PACKAGING": 0.0,
+            "Brand": "",
+            "Pack Size": "",
             "Group": 0,  # Dropdown: 0-6
             "Overhead": OH_DATA.get(0, 0.0),  # Auto-lookup from Group
             "Quantity": 0.0,
@@ -439,6 +525,8 @@ column_cfg = {
     "Product RM": st.column_config.TextColumn(width="small"),
     "ราคา RM": st.column_config.NumberColumn(format="%.2f", width="small"),
     "PACKAGING": st.column_config.NumberColumn(format="%.2f", width="small"),
+    "Brand": st.column_config.TextColumn(width="small"),
+    "Pack Size": st.column_config.TextColumn(width="small"),
     "Group": st.column_config.SelectboxColumn(options=[0,1,2,3,4,5,6], width="small", help="เลือก Overhead Group (0-6)"),
     "Overhead": st.column_config.NumberColumn(format="%.2f", width="small", disabled=True, help="Auto-lookup จาก Group"),
     "Quantity": st.column_config.NumberColumn(format="%.2f", width="small"),
@@ -474,10 +562,18 @@ for idx in edited_df.index:
 
 
 # --- CALCULATIONS ---
+# ตามข้อกำหนด:
+# 1.1 ราคา RM, RM Net Yield, PACKAGING, Overhead, Factory Expense = value * 1000 / Exchange Rate
+# 1.2 Export Expense = value / Exchange Rate
+# 1.3 AR Interest = ((Selling Price * AR Interest Rate (%)) / 365) * AR Interest Day
+# 1.4 RM Interest = ((Selling Price * RM Interest Rate (%)) / 365) * RM Interest Day
+# 1.5 WH Storage = 30 * WH Storage Day * (Quantity / 1000)
 results = []
 total_qty_all = edited_df["Quantity"].sum()
-total_freight_final = v_freight # Total Freight Input
-total_export_exp_final = (v_shipping + v_truck + survey_total + v_insurance + docs_total + v_doc_prep + port_charges_total + other_expense_value)
+
+# รวม Freight เข้ากับ Export Expense
+total_export_exp_combined = (v_freight + v_shipping + v_truck + survey_total + v_insurance + 
+                              docs_total + v_doc_prep + port_charges_total + other_expense_value)
 
 for index, row in edited_df.iterrows():
     qty = row.get("Quantity", 0.0)
@@ -485,56 +581,71 @@ for index, row in edited_df.iterrows():
     if qty <= 0 and not row.get("Product Name"):
         continue
 
-    c_rm = row.get("ราคา RM", 0.0)
-    c_pkg = row.get("PACKAGING", 0.0)
-    c_ovh = row.get("Overhead", 0.0)
-    c_fac = row.get("Factory Expense", 0.0)
+    # ค่าดิบจากตาราง (THB)
+    c_rm_thb = row.get("ราคา RM", 0.0)
+    c_pkg_thb = row.get("PACKAGING", 0.0)
+    c_ovh_thb = row.get("Overhead", 0.0)
+    c_fac_thb = row.get("Factory Expense", 0.0)
     c_commission = row.get("Commision", 0.0)
     c_ap = row.get("A&P", 0.0)
     c_agreement = row.get("Agreement", 0.0)
     c_other_cost = row.get("Other Cost", 0.0)
-    
-    # Allocations
-    if total_qty_all > 0:
-        unit_freight = total_freight_final / total_qty_all
-        unit_exp = total_export_exp_final / total_qty_all
-    else:
-        unit_freight = 0
-        unit_exp = 0
-        
-    # Interest & Storage 
-    unit_ar = c_rm * (ar_rate/100) * (ar_days/365)
-    unit_rm_int = c_rm * (rm_rate/100) * (rm_days/365)
-    unit_wh = (30/1000) * (wh_days/30)
-    
-    # Yield Loss logic
-    yield_loss = c_rm * (yield_loss_pct / 100)
-    
-    # Total Cost = RM + Pkg + Ovh + Fac + Freight + Exp + YieldLoss + Commission + A&P + Agreement + Other Cost
-    total_cost = c_rm + c_pkg + c_ovh + c_fac + unit_freight + unit_exp + yield_loss + c_commission + c_ap + c_agreement + c_other_cost
-    
-    # Margins
     selling = row.get("Selling Price", 0.0)
-    # Margin Cost = Selling - Total Cost
+    
+    # 1.1 แปลงค่า: ราคา RM, PACKAGING, Overhead, Factory Expense = value * 1000 / Exchange Rate
+    if ex_rate > 0:
+        c_rm = c_rm_thb * 1000 / ex_rate
+        c_pkg = c_pkg_thb * 1000 / ex_rate
+        c_ovh = c_ovh_thb * 1000 / ex_rate
+        c_fac = c_fac_thb * 1000 / ex_rate
+    else:
+        c_rm = c_rm_thb
+        c_pkg = c_pkg_thb
+        c_ovh = c_ovh_thb
+        c_fac = c_fac_thb
+    
+    # Yield Loss logic - RM Net Yield = RM + Yield Loss (หลังแปลงหน่วย)
+    yield_loss = c_rm * (yield_loss_pct / 100)
+    rm_net_yield = c_rm + yield_loss
+    
+    # 1.2 Export Expense per unit = total / qty / Exchange Rate
+    if total_qty_all > 0 and ex_rate > 0:
+        unit_export_exp = (total_export_exp_combined / total_qty_all) / ex_rate
+    else:
+        unit_export_exp = 0
+        
+    # 1.3 AR Interest = ((Selling Price * AR Interest Rate (%)) / 365) * AR Interest Day
+    unit_ar = ((selling * (ar_rate / 100)) / 365) * ar_days
+    
+    # 1.4 RM Interest = ((Selling Price * RM Interest Rate (%)) / 365) * RM Interest Day
+    unit_rm_int = ((selling * (rm_rate / 100)) / 365) * rm_days
+    
+    # 1.5 WH Storage = 30 * WH Storage Day * (Quantity / 1000)
+    unit_wh = 30 * wh_days * (qty / 1000)
+    
+    # Total Cost = RM Net Yield + PACKAGING + Overhead + Factory Expense + Export Expense + Commission + A&P + Agreement + Other Cost
+    total_cost = rm_net_yield + c_pkg + c_ovh + c_fac + unit_export_exp + c_commission + c_ap + c_agreement + c_other_cost
+    
+    # Margin Cost = Selling Price - Total Cost
     margin_cost = selling - total_cost
     
-    # Margin Cost After = Margin Cost - AR - RM - WH
+    # Margin Cost After = Margin Cost - AR Interest - RM Interest - WH Storage
     margin_cost_after = margin_cost - unit_ar - unit_rm_int - unit_wh
     
     results.append({
         "Item": row["Item"],
         "Product Name": row["Product Name"],
         "Product RM": row["Product RM"],
-        "ราคา RM": c_rm,
+        "ราคา RM": round(c_rm, 4),
         "Yield loss": round(yield_loss, 4),
         "Yield loss %": yield_loss_pct,
-        "PACKAGING": c_pkg,
+        "RM Net Yield": round(rm_net_yield, 4),
+        "PACKAGING": round(c_pkg, 4),
         "Group": row.get("Group", 0),
-        "Overhead": c_ovh,
+        "Overhead": round(c_ovh, 4),
         "Quantity": qty,
-        "Factory Expense": c_fac,
-        "Freight": round(unit_freight, 4),
-        "Export Expense": round(unit_exp, 4),
+        "Factory Expense": round(c_fac, 4),
+        "Export Expense": round(unit_export_exp, 4),
         "Commision": c_commission,
         "A&P": c_ap,
         "Agreement": c_agreement,
