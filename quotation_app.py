@@ -4,6 +4,12 @@ import os
 from datetime import datetime, date
 import time
 import yfinance as yf
+from supabase_client import (
+    fetch_customers, fetch_currencies, fetch_ports, fetch_overhead, 
+    fetch_factory_expense, fetch_yield_loss,
+    get_overhead_by_group, get_yield_loss_by_group
+)
+
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Cost Sheet System", layout="wide", page_icon="📝")
@@ -135,70 +141,96 @@ st.markdown("""
 # --- MASTER DATA MOCKUP (Replace with real logic as needed) ---
 @st.cache_data
 def load_customer_data():
-    """Load customer data from Master/Master Customer.xlsx"""
+    """Load customer data from Supabase"""
     try:
+        data = fetch_customers()
+        if data:
+            df = pd.DataFrame(data)
+            # Map Supabase columns back to the app's internal names
+            # Supabase: customer_code, customer_name, payment_term_customer_name
+            # App: CUSTOMER_CODE, CUSTOMER_NAME, Term
+            df = df.rename(columns={
+                'customer_code': 'CUSTOMER_CODE',
+                'customer_name': 'CUSTOMER_NAME',
+                'payment_term_customer_name': 'Term'
+            })
+            
+            # Sort by CUSTOMER_NAME
+            df = df.sort_values('CUSTOMER_NAME')
+            # Create display format [CODE] NAME
+            df['Display'] = df.apply(lambda x: f"[{x['CUSTOMER_CODE']}] {x['CUSTOMER_NAME']}", axis=1)
+            
+            if 'Term' not in df.columns:
+                df['Term'] = "N/A"
+            
+            return df[['CUSTOMER_CODE', 'CUSTOMER_NAME', 'Display', 'Term']]
+        
+        # Fallback to local file if Supabase is empty
         file_path = "Master/Master Customer.xlsx"
         if os.path.exists(file_path):
             df = pd.read_excel(file_path)
-            # Ensure required columns exist
-            required = ['CUSTOMER_CODE', 'CUSTOMER_NAME']
-            if all(col in df.columns for col in required):
-                # Sort by CUSTOMER_NAME
-                df = df.sort_values('CUSTOMER_NAME')
-                # Create display format [CODE] NAME
-                df['Display'] = df.apply(lambda x: f"[{x['CUSTOMER_CODE']}] {x['CUSTOMER_NAME']}", axis=1)
-                
-                # Fetch payment terms if available
-                term_col = 'DEFAULT_PAY_TERM_DESC' if 'DEFAULT_PAY_TERM_DESC' in df.columns else ('PAY_TERM_DESC' if 'PAY_TERM_DESC' in df.columns else None)
-                if term_col:
-                    return df[['CUSTOMER_CODE', 'CUSTOMER_NAME', 'Display', term_col]].rename(columns={term_col: 'Term'})
-                else:
-                    df['Term'] = "N/A"
-                    return df[['CUSTOMER_CODE', 'CUSTOMER_NAME', 'Display', 'Term']]
+            df = df.rename(columns={'PAYMENTTERMCUSTOMERNAME': 'Term'})
+            df = df.sort_values('CUSTOMER_NAME')
+            df['Display'] = df.apply(lambda x: f"[{x['CUSTOMER_CODE']}] {x['CUSTOMER_NAME']}", axis=1)
+            return df[['CUSTOMER_CODE', 'CUSTOMER_NAME', 'Display', 'Term']]
+            
         return pd.DataFrame(columns=['CUSTOMER_CODE', 'CUSTOMER_NAME', 'Display', 'Term'])
     except Exception as e:
-        st.error(f"Error loading customer data: {e}")
+        st.error(f"Error loading customer data from Supabase: {e}")
         return pd.DataFrame(columns=['CUSTOMER_CODE', 'CUSTOMER_NAME', 'Display', 'Term'])
 
 @st.cache_data
 def load_currency_data():
-    """Load currency data from Master/MasterCurrency.xlsx"""
+    """Load currency data from Supabase"""
     try:
+        data = fetch_currencies()
+        if data:
+            # Supabase column name is 'code'
+            return sorted([item['code'] for item in data if item.get('code')])
+        
+        # Fallback to local file
         file_path = "Master/MasterCurrency.xlsx"
         if os.path.exists(file_path):
             df = pd.read_excel(file_path)
-            # Use the column 'รหัส (Code)' as the currency code
             code_col = 'รหัส (Code)'
             if code_col in df.columns:
-                # Get unique codes, drop NaNs, and sort alphabetically
-                codes = df[code_col].dropna().unique().tolist()
-                codes.sort()
-                return codes
-        return ["USD", "THB", "EUR", "JPY"] # Fallback
+                return sorted(df[code_col].dropna().unique().tolist())
+        return ["USD", "THB", "EUR", "JPY"]
     except Exception as e:
-        st.error(f"Error loading currency data: {e}")
+        st.error(f"Error loading currency data from Supabase: {e}")
         return ["USD", "THB", "EUR", "JPY"]
 
 @st.cache_data
 def load_port_data():
-    """Load port data from Master/Master Port.csv"""
+    """Load port data from Supabase"""
     try:
+        data = fetch_ports()
+        if data:
+            df = pd.DataFrame(data)
+            # Map Supabase columns: main_port_name, country_code
+            # App: Main Port Name, Country Code
+            df = df.rename(columns={
+                'main_port_name': 'Main Port Name',
+                'country_code': 'Country Code'
+            })
+            
+            # Sort by Main Port Name
+            df = df.sort_values('Main Port Name')
+            # Create display format [Country Code] Main Port Name
+            df['Display'] = df.apply(lambda x: f"[{x['Country Code']}] {x['Main Port Name']}", axis=1)
+            return df[['Country Code', 'Main Port Name', 'Display']]
+        
+        # Fallback to local file
         file_path = "Master/Master Port.csv"
         if os.path.exists(file_path):
-            # Using encoding utf-8-sig to handle BOM and low_memory=False for consistency
             df = pd.read_csv(file_path, encoding='utf-8-sig', low_memory=False)
-            required = ['Country Code', 'Main Port Name']
-            if all(col in df.columns for col in required):
-                # Filter out rows with missing port names
-                df = df.dropna(subset=['Main Port Name'])
-                # Sort by Main Port Name
-                df = df.sort_values('Main Port Name')
-                # Create display format [Country Code] Main Port Name
-                df['Display'] = df.apply(lambda x: f"[{x['Country Code']}] {x['Main Port Name']}", axis=1)
-                return df[['Country Code', 'Main Port Name', 'Display']]
+            df = df.dropna(subset=['Main Port Name'])
+            df = df.sort_values('Main Port Name')
+            df['Display'] = df.apply(lambda x: f"[{x['Country Code']}] {x['Main Port Name']}", axis=1)
+            return df[['Country Code', 'Main Port Name', 'Display']]
         return pd.DataFrame(columns=['Country Code', 'Main Port Name', 'Display'])
     except Exception as e:
-        st.error(f"Error loading port data: {e}")
+        st.error(f"Error loading port data from Supabase: {e}")
         return pd.DataFrame(columns=['Country Code', 'Main Port Name', 'Display'])
 
 # Load customer data
@@ -221,42 +253,21 @@ DESTINATIONS = ["Bangkok", "Laem Chabang", "Singapore", "Hong Kong", "Tokyo", "S
 RM_ITEMS = [f"HM {i}" for i in range(1, 21)]
 SHIPMENT_MONTHS = ["Nov.25", "Dec.25", "Jan.26", "Feb.26"]
 
-# --- Load Overhead and Factory Expense from Master.xlsx ---
-@st.cache_data
-def load_overhead_data():
-    """Load Overhead data from Master.xlsx - Sheet Overhead"""
-    try:
-        df = pd.read_excel("Master.xlsx", sheet_name="Overhead", header=None)
-        # Find rows with Group and Overhead data (rows 3-9 contain Group 0-6)
-        oh_dict = {}
-        for i in range(3, 10):  # Rows 3-9 (index) contain data for groups 0-6
-            group_val = df.iloc[i, 1]
-            overhead_val = df.iloc[i, 2]
-            # Skip rows with NaN values
-            if pd.notna(group_val) and pd.notna(overhead_val):
-                oh_dict[int(group_val)] = float(overhead_val)
-        return oh_dict
-    except Exception as e:
-        st.error(f"Error loading Overhead data: {e}")
-        # Fallback to default values
-        return {0: 0.10, 1: 0.34, 2: 0.51, 3: 0.57, 4: 0.64, 5: 0.97, 6: 1.59}
+# Load data from Supabase
+try:
+    OH_DATA = {item['group_number']: float(item['overhead_rate']) for item in fetch_overhead()}
+    if not OH_DATA:
+        OH_DATA = {0: 0.10, 1: 0.34, 2: 0.51, 3: 0.57, 4: 0.64, 5: 0.97, 6: 1.59}
+except Exception as e:
+    st.error(f"Error loading Overhead from Supabase: {e}")
+    OH_DATA = {0: 0.10, 1: 0.34, 2: 0.51, 3: 0.57, 4: 0.64, 5: 0.97, 6: 1.59}
 
-@st.cache_data
-def load_factory_expense():
-    """Load Factory Expense from Master.xlsx - Sheet Factory Expense"""
-    try:
-        df = pd.read_excel("Master.xlsx", sheet_name="Factory Expense")
-        # Get the value from the first row
-        factory_expense = float(df.iloc[0, 0])
-        return factory_expense
-    except Exception as e:
-        st.error(f"Error loading Factory Expense: {e}")
-        # Fallback to default value
-        return 0.42
-
-# Load data from Master.xlsx
-OH_DATA = load_overhead_data()
-FACTORY_EXPENSE_DEFAULT = load_factory_expense()
+try:
+    factory_data = fetch_factory_expense()
+    FACTORY_EXPENSE_DEFAULT = float(factory_data[0]['expense_rate']) if factory_data else 0.42
+except Exception as e:
+    st.error(f"Error loading Factory Expense from Supabase: {e}")
+    FACTORY_EXPENSE_DEFAULT = 0.42
 
 # --- UI START ---
 st.title("📝 Cost Sheet Management System")
