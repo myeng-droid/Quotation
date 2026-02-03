@@ -73,7 +73,9 @@ def migrate_customers():
     truncate_table("master_customers")
     print("[CUSTOMERS] Migrating customers...")
     
-    df = pd.read_excel("Master/Master Customer.xlsx")
+    # Try both root and Master folder
+    file_path = "Master Customer.xlsx" if os.path.exists("Master Customer.xlsx") else "Master/Master Customer.xlsx"
+    df = pd.read_excel(file_path)
     
     column_mapping = {
         'COMPANY_CODE': 'company_code',
@@ -124,7 +126,8 @@ def migrate_currencies():
     """Migrate currency data from MasterCurrency.xlsx to Supabase."""
     truncate_table("master_currencies")
     print("[CURRENCIES] Migrating currencies...")
-    df = pd.read_excel("Master/MasterCurrency.xlsx")
+    file_path = "MasterCurrency.xlsx" if os.path.exists("MasterCurrency.xlsx") else "Master/MasterCurrency.xlsx"
+    df = pd.read_excel(file_path)
     df.columns = ['sequence_no', 'code', 'currency_name', 'symbol', 'is_base_currency']
     df['is_base_currency'] = df['is_base_currency'].notna()
     records = [clean_record(r) for r in df.to_dict('records') if clean_record(r).get('code')]
@@ -221,6 +224,30 @@ def migrate_yield_loss():
     except Exception as e: print(f"[ERROR] Yield Loss: {e}")
 
 
+def migrate_shipping_rates():
+    """Migrate shipping rates from Doc/shipping_rates_structure.csv to Supabase."""
+    truncate_table("shipping_rates")
+    print("[SHIPPING] Migrating shipping rates...")
+    try:
+        df = pd.read_csv("Doc/shipping_rates_structure.csv")
+        # Columns: tier_id,min_qty,max_qty,price_per_container,unit,description_th
+        records = []
+        for _, row in df.iterrows():
+            records.append({
+                'min_qty': int(row['min_qty']),
+                'max_qty': int(row['max_qty']),
+                'price_per_container': float(row['price_per_container']),
+                'unit': str(row['unit']),
+                'description_th': str(row['description_th'])
+            })
+        
+        if records:
+            get_client().from_("shipping_rates").insert(records).execute()
+        print(f"[DONE] Shipping Rates: {len(records)} uploaded")
+    except Exception as e:
+        print(f"[ERROR] Shipping Rates: {e}")
+
+
 def main():
     print("=" * 50); print("Starting Master Data Migration to Supabase"); print("=" * 50)
     if not SUPABASE_URL or not SUPABASE_KEY: return
@@ -230,6 +257,7 @@ def main():
     migrate_overhead()
     migrate_factory_expense()
     migrate_yield_loss()
+    migrate_shipping_rates()
     print("=" * 50); print("Migration Complete!"); print("=" * 50)
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ import time
 import yfinance as yf
 from supabase_client import (
     fetch_customers, fetch_currencies, fetch_ports, fetch_overhead, 
-    fetch_factory_expense, fetch_yield_loss,
+    fetch_factory_expense, fetch_yield_loss, fetch_shipping_rates,
     get_overhead_by_group, get_yield_loss_by_group
 )
 
@@ -269,6 +269,23 @@ except Exception as e:
     st.error(f"Error loading Factory Expense from Supabase: {e}")
     FACTORY_EXPENSE_DEFAULT = 0.42
 
+# Load Tiered Shipping Rates
+try:
+    SHIPPING_RATES = fetch_shipping_rates()
+except Exception as e:
+    st.error(f"Error loading Shipping Rates from Supabase: {e}")
+    SHIPPING_RATES = []
+
+def get_shipping_rate(qty):
+    """Find the applicable rate for the given quantity from tiers."""
+    for tier in SHIPPING_RATES:
+        if tier['min_qty'] <= qty <= tier['max_qty']:
+            return float(tier['price_per_container'])
+    # If no tier found, use a default fallback or the last tier
+    if SHIPPING_RATES:
+        return float(SHIPPING_RATES[-1]['price_per_container'])
+    return 1400.0 # Standard fallback
+
 # --- UI START ---
 st.title("📝 Cost Sheet Management System")
 
@@ -390,7 +407,9 @@ e_col1, e_col2 = st.columns(2)
 
 with e_col1:
     st.write("**Shipping & Transport**")
-    v_shipping = st.number_input("ค่า Shipping (1,400 บาท/ตู้)", value=float(container_qty * 1400))
+    # Tiered Shipping Rate Calculation
+    applicable_rate = get_shipping_rate(container_qty)
+    v_shipping = st.number_input(f"ค่า Shipping ({applicable_rate:,.0f} บาท/ตู้)", value=float(container_qty * applicable_rate))
     v_truck = st.number_input("ค่าขนย้าย-ส่งออก: หัวลาก/ผ่านท่า (8,300 บ./ตู้)", value=float(container_qty * 8300))
     
     st.write("**Survey & Inspection**")

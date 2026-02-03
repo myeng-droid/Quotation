@@ -84,6 +84,17 @@ CREATE TABLE IF NOT EXISTS master_yield_loss (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Table: shipping_rates
+CREATE TABLE IF NOT EXISTS shipping_rates (
+    id SERIAL PRIMARY KEY,
+    min_qty INTEGER NOT NULL,
+    max_qty INTEGER NOT NULL,
+    price_per_container DECIMAL(18,2) NOT NULL,
+    unit VARCHAR(50),
+    description_th TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Create indexes for frequently queried columns
 CREATE INDEX IF NOT EXISTS idx_customers_code ON master_customers(customer_code);
 CREATE INDEX IF NOT EXISTS idx_customers_name ON master_customers(customer_name);

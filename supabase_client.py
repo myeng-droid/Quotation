@@ -79,6 +79,14 @@ def fetch_yield_loss():
     return response.data
 
 
+@st.cache_data(ttl=3600)
+def fetch_shipping_rates():
+    """Fetch tiered shipping rates from Supabase."""
+    client = get_postgrest_client()
+    response = client.from_("shipping_rates").select("*").order("min_qty").execute()
+    return response.data
+
+
 def get_overhead_by_group(group_number: int) -> float:
     """Get overhead rate for a specific group number."""
     overheads = fetch_overhead()
