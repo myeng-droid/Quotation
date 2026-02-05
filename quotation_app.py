@@ -798,6 +798,152 @@ loading_df = st.data_editor(
     key="loading_editor"
 )
 
+# --- Save Section ---
+st.markdown("---")
+st.header("💾 บันทึกข้อมูล (Save Data)")
+
+if st.button("Save to Database", type="primary"):
+    try:
+        from supabase_client import save_quotation
+        
+        # 1. Prepare Header Data (trx_general_infos)
+        # Note: Ensure all variables (doc_no, cust1, etc.) are available from earlier in the script
+        general_info = {
+            "doc_no": doc_no,
+            "doc_date": str(doc_date),
+            "trader_name": trader_name,
+            "team": team,
+            "customer_importer": cust1,
+            "customer_end_user": cust2,
+            "incoterm": incoterm,
+
+            "ship_date_from": str(ship_from),
+            "ship_date_to": str(ship_to),
+            "currency": currency,
+            "spot_rate": spot_rate,
+            "discount_rate": discount_rate,
+            "premium_rate": premium_rate,
+            "exchange_rate": ex_rate,
+            "dest_1": destination1,
+            "dest_2": destination2,
+            "dest_3": destination3,
+            "dest_4": destination4
+        }
+        
+        # 2. Prepare Export Expense Data (trx_export_expenses)
+        export_expenses = {
+            "container_size": container_size,
+            "container_qty": int(container_qty),
+            "invoice_qty": int(invoice_qty),
+            "ton_per_container": ton_per_container,
+            "freight_cost": v_freight,
+            "shipping_cost": v_shipping,
+            "truck_cost": v_truck,
+            "survey_check_cost": v_survey_check,
+            "survey_vehicle_cost": v_survey_vehicle,
+            "insurance_cost": v_insurance,
+            "thc_cost": v_thc,
+            "seal_cost": v_seal,
+            "bl_fee": v_bl_fee,
+            "handling_fee": v_handling,
+            "doc_prep_fee": v_doc_prep,
+            "doc_agri_fee": v_doc_agri,
+            "doc_phyto_fee": v_doc_phyto,
+            "doc_health_fee": v_doc_health,
+            "doc_origin_fee": v_doc_origin,
+            "doc_ms24_fee": v_doc_ms24,
+            "doc_chamber_fee": v_doc_chamber,
+            "doc_dft_fee": v_doc_dft
+        }
+        
+        # 3. Prepare Interest Data (trx_interests)
+        interests = {
+            "payment_term_auto": p_term_auto,
+            "payment_term_ship": p_term_ship,
+            "ar_rate": ar_rate,
+            "ar_days": int(ar_days),
+            "rm_rate": rm_rate,
+            "rm_days": int(rm_days),
+            "wh_days": int(wh_days)
+        }
+        
+        # 4. Prepare Production Costs (trx_production_costs) mapped from results
+        production_costs = []
+        for r in results:
+            item = {
+                "item_order": r["Item"],
+                "product_name": r["Product Name"],
+                "product_rm": r["Product RM"],
+                "rm_price_snapshot": r["RM Price"],
+                "yield_loss_pct": r["Yield loss %"],
+                "yield_loss_val": r["Yield loss"],
+                "bp_val": r["BP"],
+                "rm_net_yield": r["RM Net Yield"],
+                "packaging": r["PACKAGING"],
+                "brand": r["Brand"],
+                "pack_size": r["Pack Size"],
+                "overhead_group": r["Group (0-6)"],
+                "overhead_val": r["Overhead"],
+                "quantity": r["Quantity"],
+                "factory_expense": r["Factory Expense"],
+                "freight_val": 0.0, # Not explicitly in results dict, handled in export expense usually, or calculated
+                "export_expense": r["Export Expense"],
+                "commission": r["Commision"],
+                "ap_expense": r["A&P"],
+                "agreement": r["Agreement"],
+                "other_cost": r["Other Cost"],
+                "total_cost": r["Total Cost"],
+                "selling_price": r["Selling Price"],
+                "margin_cost": r["MarginCost (Unit)"],
+                "ar_interest": r["AR Interest (Total)"] / r["Quantity"] if r["Quantity"] > 0 else 0,
+                "rm_interest": r["RM Interest (Total)"] / r["Quantity"] if r["Quantity"] > 0 else 0,
+                "wh_storage": r["WH Storage (Total)"],
+                "margin_after": r["Margin After (Total)"],
+                "status": "Draft"
+            }
+            production_costs.append(item)
+            
+        # 5. Prepare Loadings
+        loadings = []
+        for idx, row in loading_df.iterrows():
+            if row["รายการสินค้า"]: # Only add if product name exists
+                loadings.append({
+                    "order_no": row["No."],
+                    "product_name": row["รายการสินค้า"],
+                    "qty_cartons": int(row["จำนวน (ลัง/กล่อง)"]),
+                    "weight_per_unit": float(row["น้ำหนัก/หน่วย (KG)"]),
+                    "total_weight": float(row["น้ำหนักรวม (KG)"]),
+                    "container_no": row["ตู้ที่"],
+                    "remark": row["หมายเหตุ"]
+                })
+                
+        # 6. Prepare Remarks
+        remarks = []
+        for idx, row in remark_df.iterrows():
+            if row["Remark"]:
+                remarks.append({
+                    "order_no": row["No."],
+                    "remark_text": row["Remark"]
+                })
+
+        # Bundle everything
+        full_data = {
+            "general_info": general_info,
+            "export_expenses": export_expenses,
+            "interests": interests,
+            "production_costs": production_costs,
+            "loadings": loadings,
+            "remarks": remarks
+        }
+        
+        # Call API
+        quotation_id = save_quotation(full_data)
+        st.success(f"✅ Saved successfully! Quotation ID: {quotation_id}")
+        st.balloons()
+        
+    except Exception as e:
+        st.error(f"❌ Error saving data: {str(e)}")
+
 st.write("---")
 if st.button("💾 บันทึกเอกสาร Cost Sheet", use_container_width=True):
     st.success(f"บันทึกข้อมูล {doc_no} เรียบร้อยแล้ว")

@@ -1,164 +1,203 @@
--- Enable UUID extension if not already enabled
+-- Database Migration Script (Doc-Aligned)
+-- Structure matches the 5 Excel files in Doc/ folder
+
+-- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
--- 1. Table: quotations (Transaction Header)
-CREATE TABLE IF NOT EXISTS public.quotations (
+-- 1. Table: trx_general_infos
+-- Source: Doc/General Data.xlsx
+CREATE TABLE IF NOT EXISTS public.trx_general_infos (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    document_no TEXT NOT NULL,
-    document_date DATE,
-    status TEXT DEFAULT 'Draft',
-    
-    -- General Info
+    doc_no TEXT NOT NULL UNIQUE,
+    doc_date DATE,
     trader_name TEXT,
     team TEXT,
-    customer_importer_code TEXT,
-    customer_end_user_code TEXT,
+    customer_importer TEXT,
+    customer_end_user TEXT,
     incoterm TEXT,
-    shipment_date_from DATE,
-    shipment_date_to DATE,
+    ship_date_from DATE,
+    ship_date_to DATE,
     
-    -- Financials & Exchange Rate
     currency TEXT,
-    spot_rate NUMERIC(10,4),
-    discount_rate NUMERIC(10,4),
-    premium_rate NUMERIC(10,4),
-    exchange_rate NUMERIC(10,4), -- Critical snapshot
+    spot_rate DECIMAL(10,4),
+    discount_rate DECIMAL(10,4),
+    premium_rate DECIMAL(10,4),
+    exchange_rate DECIMAL(10,4),
     
-    -- Interest Rates
-    ar_interest_rate NUMERIC(5,2),
-    ar_interest_days INTEGER,
-    rm_interest_rate NUMERIC(5,2),
-    rm_interest_days INTEGER,
-    wh_storage_days INTEGER,
-
-    -- Destinations
-    destination_1 TEXT,
-    destination_2 TEXT,
-    destination_3 TEXT,
-    destination_4 TEXT,
-    
-    -- Shipping Details
-    container_size TEXT,
-    container_qty INTEGER DEFAULT 1,
-    invoice_qty INTEGER DEFAULT 1,
-    ton_per_container NUMERIC(10,2),
-    
-    -- Costs
-    freight_cost NUMERIC(15,2) DEFAULT 0,
-    shipping_cost NUMERIC(15,2) DEFAULT 0,
-    truck_cost NUMERIC(15,2) DEFAULT 0,
-    
-    survey_check_cost NUMERIC(15,2) DEFAULT 0,
-    survey_vehicle_cost NUMERIC(15,2) DEFAULT 0,
-    
-    insurance_type TEXT,
-    insurance_cost NUMERIC(15,2) DEFAULT 0,
-    
-    -- JSONB for fixed/standard export fees to keep schema clean
-    -- Structure: { "thc": 2800, "seal": 300, "bl": 2000, "handling": 1000, "doc_prep": 5500, ... }
-    fixed_export_expenses JSONB DEFAULT '{}'::jsonb,
+    dest_1 TEXT,
+    dest_2 TEXT,
+    dest_3 TEXT,
+    dest_4 TEXT,
     
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Index for searching
-CREATE INDEX IF NOT EXISTS idx_quotations_doc_no ON public.quotations(document_no);
+CREATE INDEX IF NOT EXISTS idx_gen_doc_no ON public.trx_general_infos(doc_no);
 
 
--- 2. Table: quotation_items (Section 4: Production Cost)
-CREATE TABLE IF NOT EXISTS public.quotation_items (
+-- 2. Table: trx_export_expenses
+-- Source: Doc/Export Expense .xlsx
+CREATE TABLE IF NOT EXISTS public.trx_export_expenses (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    quotation_id UUID REFERENCES public.quotations(id) ON DELETE CASCADE,
-    item_order INTEGER, -- 1 to 15
+    quotation_id UUID REFERENCES public.trx_general_infos(id) ON DELETE CASCADE,
     
-    product_name TEXT,
-    product_rm_code TEXT,
-    
-    -- Cost Factors (Snapshots)
-    rm_base_price NUMERIC(15,4) DEFAULT 0,
-    
-    overhead_group INTEGER, -- 0-6
-    overhead_rate NUMERIC(10,4) DEFAULT 0, -- Snapshot
-    yield_loss_pct NUMERIC(5,2) DEFAULT 0, -- Snapshot
-    
-    quantity NUMERIC(15,2) DEFAULT 0,
-    
-    -- Costs
-    packaging_cost NUMERIC(15,4) DEFAULT 0,
-    factory_expense_rate NUMERIC(10,4) DEFAULT 0, -- Snapshot
+    -- Container Info
+    container_size TEXT,
+    container_qty INTEGER,
+    invoice_qty INTEGER,
+    ton_per_container DECIMAL(10,2),
     
     -- Expenses
-    commission NUMERIC(15,4) DEFAULT 0,
-    ap_expense NUMERIC(15,4) DEFAULT 0,
-    agreement_expense NUMERIC(15,4) DEFAULT 0,
-    other_cost NUMERIC(15,4) DEFAULT 0,
+    freight_cost DECIMAL(15,2),
+    shipping_cost DECIMAL(15,2),
+    truck_cost DECIMAL(15,2),
+    survey_check_cost DECIMAL(15,2),
+    survey_vehicle_cost DECIMAL(15,2),
+    insurance_cost DECIMAL(15,2),
     
-    -- Selling
+    -- Port Fees
+    thc_cost DECIMAL(15,2),
+    seal_cost DECIMAL(15,2),
+    bl_fee DECIMAL(15,2),
+    handling_fee DECIMAL(15,2),
+    
+    -- Document Fees
+    doc_prep_fee DECIMAL(15,2),
+    doc_agri_fee DECIMAL(15,2),
+    doc_phyto_fee DECIMAL(15,2),
+    doc_health_fee DECIMAL(15,2),
+    doc_origin_fee DECIMAL(15,2),
+    doc_ms24_fee DECIMAL(15,2),
+    doc_chamber_fee DECIMAL(15,2),
+    doc_dft_fee DECIMAL(15,2),
+    
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_exp_qid ON public.trx_export_expenses(quotation_id);
+
+
+-- 3. Table: trx_interests
+-- Source: Doc/Interest .xlsx
+CREATE TABLE IF NOT EXISTS public.trx_interests (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    quotation_id UUID REFERENCES public.trx_general_infos(id) ON DELETE CASCADE,
+    
+    payment_term_auto TEXT,
+    payment_term_ship TEXT,
+    
+    ar_rate DECIMAL(5,2),
+    ar_days INTEGER,
+    rm_rate DECIMAL(5,2),
+    rm_days INTEGER,
+    wh_days INTEGER,
+    
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_int_qid ON public.trx_interests(quotation_id);
+
+
+-- 4. Table: trx_production_costs
+-- Source: Doc/ProductionCost.xlsx
+-- Stores line items
+CREATE TABLE IF NOT EXISTS public.trx_production_costs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    quotation_id UUID REFERENCES public.trx_general_infos(id) ON DELETE CASCADE,
+    item_order INTEGER,
+    
+    product_name TEXT,
+    product_rm TEXT,
+    rm_price_snapshot DECIMAL(15,4),
+    
+    yield_loss_pct DECIMAL(5,2),
+    yield_loss_val DECIMAL(15,4),
+    bp_val DECIMAL(15,4),
+    rm_net_yield DECIMAL(15,4),
+    
+    packaging DECIMAL(15,4),
     brand TEXT,
     pack_size TEXT,
-    selling_price NUMERIC(15,4) DEFAULT 0,
+    
+    overhead_group INTEGER,
+    overhead_val DECIMAL(15,4),
+    
+    quantity DECIMAL(15,2),
+    factory_expense DECIMAL(15,4),
+    
+    freight_val DECIMAL(15,4),
+    export_expense DECIMAL(15,4),
+    
+    commission DECIMAL(15,4),
+    ap_expense DECIMAL(15,4),
+    agreement DECIMAL(15,4),
+    other_cost DECIMAL(15,4),
+    
+    total_cost DECIMAL(15,4),
+    selling_price DECIMAL(15,4),
+    
+    margin_cost DECIMAL(15,4),
+    ar_interest DECIMAL(15,4),
+    rm_interest DECIMAL(15,4),
+    wh_storage DECIMAL(15,4),
+    margin_after DECIMAL(15,4),
+    
+    status TEXT, -- From Excel 'Status' col
     
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_quotation_items_qid ON public.quotation_items(quotation_id);
+CREATE INDEX IF NOT EXISTS idx_prod_qid ON public.trx_production_costs(quotation_id);
 
 
--- 3. Table: quotation_expenses (Section 2: Other Expenses List - 10 rows)
-CREATE TABLE IF NOT EXISTS public.quotation_expenses (
+-- 5. Table: trx_loadings
+-- Source: Doc/RemarkLoading.xlsx (Loading part)
+CREATE TABLE IF NOT EXISTS public.trx_loadings (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    quotation_id UUID REFERENCES public.quotations(id) ON DELETE CASCADE,
-    item_no INTEGER, 
-    description TEXT,
-    amount NUMERIC(15,2) DEFAULT 0,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_quotation_expenses_qid ON public.quotation_expenses(quotation_id);
-
-
--- 4. Table: quotation_loadings (Loading Plan)
-CREATE TABLE IF NOT EXISTS public.quotation_loadings (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    quotation_id UUID REFERENCES public.quotations(id) ON DELETE CASCADE,
-    order_no INTEGER,
+    quotation_id UUID REFERENCES public.trx_general_infos(id) ON DELETE CASCADE,
     
-    item_name TEXT,
-    quantity_cartons INTEGER DEFAULT 0,
-    weight_per_unit NUMERIC(10,2) DEFAULT 0,
-    total_weight NUMERIC(15,2) DEFAULT 0,
+    order_no INTEGER, -- Matches 'Item'
+    product_name TEXT, -- Matches 'Remark' (Loading Item)
+    qty_cartons INTEGER, -- Matches 'Container'
     
+    -- Not explicitly in RemarkLoading.xlsx but needed for logic:
+    weight_per_unit DECIMAL(10,2), 
+    total_weight DECIMAL(15,2),
     container_no TEXT,
     remark TEXT,
     
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_quotation_loadings_qid ON public.quotation_loadings(quotation_id);
+CREATE INDEX IF NOT EXISTS idx_load_qid ON public.trx_loadings(quotation_id);
 
 
--- 5. Table: quotation_remarks (Remarks - 20 lines)
-CREATE TABLE IF NOT EXISTS public.quotation_remarks (
+-- 6. Table: trx_remarks
+-- Source: Doc/RemarkLoading.xlsx (Remark part)
+CREATE TABLE IF NOT EXISTS public.trx_remarks (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    quotation_id UUID REFERENCES public.quotations(id) ON DELETE CASCADE,
+    quotation_id UUID REFERENCES public.trx_general_infos(id) ON DELETE CASCADE,
+    
     order_no INTEGER,
     remark_text TEXT,
+    
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_quotation_remarks_qid ON public.quotation_remarks(quotation_id);
+CREATE INDEX IF NOT EXISTS idx_rem_qid ON public.trx_remarks(quotation_id);
 
--- Enable Row Level Security (RLS) - Optional but recommended
-ALTER TABLE public.quotations ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.quotation_items ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.quotation_expenses ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.quotation_loadings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.quotation_remarks ENABLE ROW LEVEL SECURITY;
+-- RLS Policies
+ALTER TABLE public.trx_general_infos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.trx_export_expenses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.trx_interests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.trx_production_costs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.trx_loadings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.trx_remarks ENABLE ROW LEVEL SECURITY;
 
--- Create Policy (Allow all for now, adjust based on auth needs)
-CREATE POLICY "Enable all access for authenticated users" ON public.quotations FOR ALL USING (true);
-CREATE POLICY "Enable all access for authenticated users" ON public.quotation_items FOR ALL USING (true);
-CREATE POLICY "Enable all access for authenticated users" ON public.quotation_expenses FOR ALL USING (true);
-CREATE POLICY "Enable all access for authenticated users" ON public.quotation_loadings FOR ALL USING (true);
-CREATE POLICY "Enable all access for authenticated users" ON public.quotation_remarks FOR ALL USING (true);
+CREATE POLICY "Enable all access" ON public.trx_general_infos FOR ALL USING (true);
+CREATE POLICY "Enable all access" ON public.trx_export_expenses FOR ALL USING (true);
+CREATE POLICY "Enable all access" ON public.trx_interests FOR ALL USING (true);
+CREATE POLICY "Enable all access" ON public.trx_production_costs FOR ALL USING (true);
+CREATE POLICY "Enable all access" ON public.trx_loadings FOR ALL USING (true);
+CREATE POLICY "Enable all access" ON public.trx_remarks FOR ALL USING (true);

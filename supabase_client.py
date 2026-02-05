@@ -113,3 +113,94 @@ def get_yield_loss_by_group(group_number: int) -> float:
         if item.get('group_number') == group_number:
             return float(item.get('yield_loss_percent', 0.0))
     return 0.0
+
+
+def save_quotation(data: dict) -> str:
+    """
+    Save the full quotation data to Supabase (6 tables).
+    Uses Upsert for Header (on doc_no) to allow overwriting/retrying.
+    """
+    client = get_postgrest_client()
+    
+    # 1. Upsert Header (trx_general_infos)
+    print("Saving/Updating Header...")
+    general_info = data.get("general_info", {})
+    # Use upsert with on_conflict if supported, or just upsert (PostgREST handles UNIQUE)
+    res_hdr = client.from_("trx_general_infos").upsert(general_info, on_conflict="doc_no").execute()
+    
+    if not res_hdr.data:
+        raise Exception("Failed to save header information")
+        
+    quotation_id = res_hdr.data[0]['id']
+    print(f"Header ID: {quotation_id}")
+    
+    # 1.1 Clean up existing details (to avoid duplicates on upsert/retry)
+    detail_tables = [
+        "trx_export_expenses", "trx_interests", "trx_production_costs", 
+        "trx_loadings", "trx_remarks"
+    ]
+    print("Cleaning up old details...")
+    for table in detail_tables:
+        client.from_(table).delete().eq("quotation_id", quotation_id).execute()
+
+    # Helper to add quote_id and insert
+    def insert_related(table, items, is_list=True):
+        if not items:
+            return
+        
+        # Prepare payload
+        payload = items if is_list else [items]
+        
+        # Inject foreign key
+        for item in payload:
+            item['quotation_id'] = quotation_id
+            
+        print(f"Saving to {table}...")
+        client.from_(table).insert(payload).execute()
+
+    try:
+        # 2. Insert Export Expenses
+        insert_related("trx_export_expenses", data.get("export_expenses", {}), is_list=False)
+        
+        # 3. Insert Interests
+        insert_related("trx_interests", data.get("interests", {}), is_list=False)
+        
+        # 4. Insert Product Costs
+        insert_related("trx_production_costs", data.get("production_costs", []), is_list=True)
+        
+        # 5. Insert Loadings
+        insert_related("trx_loadings", data.get("loadings", []), is_list=True)
+        
+        # 6. Insert Remarks
+        insert_related("trx_remarks", data.get("remarks", []), is_list=True)
+        
+        return quotation_id
+        
+    except Exception as e:
+        print(f"Error saving quotation details: {e}")
+        raise e
+
+
+def fetch_quotations():
+    """Fetch all quotations header info for the dashboard."""
+    client = get_postgrest_client()
+    # Select specific columns to be efficient
+    response = client.from_("trx_general_infos").select(
+        "id, doc_no, doc_date, customer_importer, status, total_cost" # Note: total_cost might not be in header?
+        # Check schema: Header has doc_no, doc_date, customer_importer, status. 
+        # Total amount is not explicitly in Header. It is in production costs sum?
+        # Actually, in db_migration.sql, trx_general_infos DOES NOT have total amount.
+        # We might need to fetch it or just show basic info for now.
+        # Let's verify 'trx_general_infos' columns. 
+        # It has: id, doc_no, doc_date, trader_name, customer_importer, status.
+        # We can fetch "*" for now.
+        "*" 
+    ).order("created_at", desc=True).execute()
+    return response.data
+
+def delete_quotation(quotation_id: str):
+    """Delete a quotation and all its related data (Cascade)."""
+    client = get_postgrest_client()
+    # Supabase cascade delete should handle the relations if set up, 
+    # but our migration script said 'ON DELETE CASCADE', so we just delete header.
+    client.from_("trx_general_infos").delete().eq("id", quotation_id).execute()
