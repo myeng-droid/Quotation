@@ -184,18 +184,10 @@ def save_quotation(data: dict) -> str:
 def fetch_quotations():
     """Fetch all quotations header info for the dashboard."""
     client = get_postgrest_client()
-    # Select specific columns to be efficient
-    response = client.from_("trx_general_infos").select(
-        "id, doc_no, doc_date, customer_importer, status, total_cost" # Note: total_cost might not be in header?
-        # Check schema: Header has doc_no, doc_date, customer_importer, status. 
-        # Total amount is not explicitly in Header. It is in production costs sum?
-        # Actually, in db_migration.sql, trx_general_infos DOES NOT have total amount.
-        # We might need to fetch it or just show basic info for now.
-        # Let's verify 'trx_general_infos' columns. 
-        # It has: id, doc_no, doc_date, trader_name, customer_importer, status.
-        # We can fetch "*" for now.
-        "*" 
-    ).order("created_at", desc=True).execute()
+    # Select all columns to ensure we get what exists. 
+    # Note: 'status' and 'total_cost' are currently NOT in the header table schema, 
+    # so they will be missing. Logic in Home.py should handle this.
+    response = client.from_("trx_general_infos").select("*").order("created_at", desc=True).execute()
     return response.data
 
 def delete_quotation(quotation_id: str):
