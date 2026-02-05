@@ -6,7 +6,7 @@ import time
 import yfinance as yf
 from supabase_client import (
     fetch_customers, fetch_currencies, fetch_ports, fetch_overhead, 
-    fetch_factory_expense, fetch_yield_loss, fetch_shipping_rates,
+    fetch_factory_expense, fetch_shipping_rates, fetch_rm_costs, fetch_calculator_specs,
     get_overhead_by_group, get_yield_loss_by_group
 )
 
@@ -276,6 +276,38 @@ except Exception as e:
     st.error(f"Error loading Shipping Rates from Supabase: {e}")
     SHIPPING_RATES = []
 
+# Load RM costs
+try:
+    RM_COSTS_DATA = fetch_rm_costs()
+    RM_COSTS_DF = pd.DataFrame(RM_COSTS_DATA) if RM_COSTS_DATA else pd.DataFrame()
+    # Unique product list for dropdown
+    RM_LIST = sorted(list(set([item['product'] for item in RM_COSTS_DATA]))) if RM_COSTS_DATA else []
+except Exception as e:
+    st.error(f"Error loading RM Costs from Supabase: {e}")
+    RM_LIST = []
+    RM_COSTS_DATA = []
+
+def get_rm_base_price(product, shipment_date_str):
+    """Match RM price by product and closest update date."""
+    if not RM_COSTS_DATA: return 0.0
+    try:
+        target_date = pd.to_datetime(shipment_date_str, format='%b.%y', errors='coerce')
+        if pd.isna(target_date): return 0.0
+        
+        matches = [r for r in RM_COSTS_DATA if r['product'] == product]
+        if not matches: return 0.0
+        
+        # Sort by date descending
+        matches.sort(key=lambda x: x['update_date'], reverse=True)
+        # Find the latest price that is on or before the target shipment date
+        for r in matches:
+            if pd.to_datetime(r['update_date']) <= target_date:
+                return float(r['price'])
+        # Fallback to the oldest if none match
+        return float(matches[-1]['price'])
+    except:
+        return 0.0
+
 def get_shipping_rate(qty):
     """Find the applicable rate for the given quantity from tiers."""
     for tier in SHIPPING_RATES:
@@ -288,16 +320,6 @@ def get_shipping_rate(qty):
 
 # --- UI START ---
 st.title("📝 Cost Sheet Management System")
-
-# Initialize State
-if 'cost_data' not in st.session_state:
-    # Initialize with 5 empty rows + 1 example
-    init_data = [
-        {"Product Name": "Example Product", "Product RM": "HM 1", "RM Price": 35.0, "PACKAGING": 5.0, "Overhead": 0.57, "Quantity": 1000.0, "Factory Expense": 0.42}
-    ]
-    for _ in range(5):
-        init_data.append({"Product Name": "", "Product RM": "", "RM Price": 0.0, "PACKAGING": 0.0, "Overhead": 0.0, "Quantity": 0.0, "Factory Expense": 0.0})
-    st.session_state.cost_data = pd.DataFrame(init_data)
 
 # --- 1. ข้อมูลทั่วไป ---
 st.markdown('<div class="section-header">1. ข้อมูลทั่วไป (General Information)</div>', unsafe_allow_html=True)
@@ -524,21 +546,18 @@ yield_loss_pct = 0.0
 st.info(f"📊 ค่าจาก Master.xlsx: Factory Expense = {FACTORY_EXPENSE_DEFAULT:.2f} | Overhead Groups: {list(OH_DATA.keys())}")
 
 if 'cost_data_v3' not in st.session_state:
-    # 15 Rows init, starting index 1
+    # 15 Rows init, matching Master Input columns
     init_data = []
     for i in range(15):
         init_data.append({
             "Item": i+1,
             "Product Name": f"Product {i+1}" if i==0 else "",
             "Product RM": "",
-            "ราคา RM": 0.0,
+            "Group": 0,
             "PACKAGING": 0.0,
             "Brand": "",
             "Pack Size": "",
-            "Group": 0,  # Dropdown: 0-6
-            "Overhead": OH_DATA.get(0, 0.0),  # Auto-lookup from Group
             "Quantity": 0.0,
-            "Factory Expense": FACTORY_EXPENSE_DEFAULT,  # Auto from Master.xlsx
             "Commision": 0.0,
             "A&P": 0.0,
             "Agreement": 0.0,
@@ -547,25 +566,21 @@ if 'cost_data_v3' not in st.session_state:
         })
     st.session_state.cost_data_v3 = pd.DataFrame(init_data)
 
-# Config for Editor - ตามลำดับคอลัมน์จาก Master.xlsx
-# Group = Dropdown เลือก 0-6, Overhead = Auto lookup ตาม Group, Factory Expense = Auto จาก Master.xlsx
+# Config for Editor - Matching Master Input editable fields
 column_cfg = {
     "Item": st.column_config.NumberColumn(disabled=True, width="small"),
     "Product Name": st.column_config.TextColumn(width="medium"),
-    "Product RM": st.column_config.TextColumn(width="small"),
-    "ราคา RM": st.column_config.NumberColumn(format="%.2f", width="small"),
-    "PACKAGING": st.column_config.NumberColumn(format="%.2f", width="small"),
+    "Product RM": st.column_config.SelectboxColumn(options=RM_LIST, width="medium"),
+    "Group": st.column_config.SelectboxColumn(options=[0,1,2,3,4,5,6], width="small", help="Overhead Group (0-6)"),
+    "PACKAGING": st.column_config.NumberColumn(format="%.4f", width="small"),
     "Brand": st.column_config.TextColumn(width="small"),
     "Pack Size": st.column_config.TextColumn(width="small"),
-    "Group": st.column_config.SelectboxColumn(options=[0,1,2,3,4,5,6], width="small", help="เลือก Overhead Group (0-6)"),
-    "Overhead": st.column_config.NumberColumn(format="%.2f", width="small", disabled=True, help="Auto-lookup จาก Group"),
     "Quantity": st.column_config.NumberColumn(format="%.2f", width="small"),
-    "Factory Expense": st.column_config.NumberColumn(format="%.2f", width="small", disabled=True, help="Auto จาก Master.xlsx"),
-    "Commision": st.column_config.NumberColumn(format="%.2f", width="small"),
-    "A&P": st.column_config.NumberColumn(format="%.2f", width="small"),
-    "Agreement": st.column_config.NumberColumn(format="%.2f", width="small"),
-    "Other Cost": st.column_config.NumberColumn(format="%.2f", width="small"),
-    "Selling Price": st.column_config.NumberColumn(format="%.2f", width="small")
+    "Commision": st.column_config.NumberColumn(format="%.4f", width="small"),
+    "A&P": st.column_config.NumberColumn(format="%.4f", width="small"),
+    "Agreement": st.column_config.NumberColumn(format="%.4f", width="small"),
+    "Other Cost": st.column_config.NumberColumn(format="%.4f", width="small"),
+    "Selling Price": st.column_config.NumberColumn(format="%.4f", width="small")
 }
 
 # Apply auto-lookup: Update Overhead based on Group selection
@@ -591,103 +606,123 @@ for idx in edited_df.index:
 
 
 
-# --- CALCULATIONS ---
-# ตามข้อกำหนด:
-# 1.1 ราคา RM, RM Net Yield, PACKAGING, Overhead, Factory Expense = value * 1000 / Exchange Rate
-# 1.2 Export Expense = value / Exchange Rate
-# 1.3 AR Interest = ((Selling Price * AR Interest Rate (%)) / 365) * AR Interest Day
-# 1.4 RM Interest = ((Selling Price * RM Interest Rate (%)) / 365) * RM Interest Day
-# 1.5 WH Storage = 30 * WH Storage Day * (Quantity / 1000)
+# --- CALCULATIONS BASED ON MASTER CALCULATOR ---
 results = []
 total_qty_all = edited_df["Quantity"].sum()
 
-# รวม Freight เข้ากับ Export Expense
+# Total Export Expenses Combined (THB)
 total_export_exp_combined = (v_freight + v_shipping + v_truck + survey_total + v_insurance + 
                               docs_total + v_doc_prep + port_charges_total + other_expense_value)
 
+# Fetch Overhead table for Yield Loss and rate
+overhead_table = fetch_overhead()
+oh_yield_map = {item['group_number']: (float(item['overhead_rate']), float(item['yield_loss_percent'])) for item in overhead_table}
+
 for index, row in edited_df.iterrows():
     qty = row.get("Quantity", 0.0)
-    # Filter empty rows for calculation speed, but keep structure
-    if qty <= 0 and not row.get("Product Name"):
+    prod_rm = row.get("Product RM", "")
+    
+    # Filter empty rows
+    if qty <= 0 and not row.get("Product Name") and not prod_rm:
         continue
 
-    # ค่าดิบจากตาราง (THB)
-    c_rm_thb = row.get("ราคา RM", 0.0)
-    c_pkg_thb = row.get("PACKAGING", 0.0)
-    c_ovh_thb = row.get("Overhead", 0.0)
-    c_fac_thb = row.get("Factory Expense", 0.0)
-    c_commission = row.get("Commision", 0.0)
-    c_ap = row.get("A&P", 0.0)
-    c_agreement = row.get("Agreement", 0.0)
-    c_other_cost = row.get("Other Cost", 0.0)
-    selling = row.get("Selling Price", 0.0)
+    # 1. RM Price Lookup & Conversion
+    # Formula: ((Auto look up price)*1000)/Exchange Rate
+    base_price = get_rm_base_price(prod_rm, doc_date.strftime('%b.%y'))
+    rm_price = (base_price * 1000 / ex_rate) if ex_rate > 0 else (base_price * 1000)
     
-    # 1.1 แปลงค่า: ราคา RM, PACKAGING, Overhead, Factory Expense = value * 1000 / Exchange Rate
-    if ex_rate > 0:
-        c_rm = c_rm_thb * 1000 / ex_rate
-        c_pkg = c_pkg_thb * 1000 / ex_rate
-        c_ovh = c_ovh_thb * 1000 / ex_rate
-        c_fac = c_fac_thb * 1000 / ex_rate
-    else:
-        c_rm = c_rm_thb
-        c_pkg = c_pkg_thb
-        c_ovh = c_ovh_thb
-        c_fac = c_fac_thb
+    # 2. Yield Loss Lookup
+    g_num = row.get("Group", 0)
+    oh_rate, y_loss_pct = oh_yield_map.get(g_num, (0.0, 0.0))
+    # Note: In Master Calculator example, Group 3 has y_loss_pct = 0.95 and Yield loss = Price / 0.95
+    yield_loss_cost = (rm_price / y_loss_pct) if y_loss_pct > 0 else rm_price
     
-    # Yield Loss logic - RM Net Yield = RM + Yield Loss (หลังแปลงหน่วย)
-    yield_loss = c_rm * (yield_loss_pct / 100)
-    rm_net_yield = c_rm + yield_loss
+    # 3. BP = (Yield loss - RM Price) / 3
+    bp_val = (yield_loss_cost - rm_price) / 3
     
-    # 1.2 Export Expense per unit = total / qty / Exchange Rate
+    # 4. RM Net Yield = Yield loss - BP
+    rm_net_yield = yield_loss_cost - bp_val
+    
+    # 5. PACKAGING, Overhead, Factory Expense (already converted in Master Calculator? no, usually per unit)
+    # The image/Excel suggests these are also unit costs.
+    # Overhead: Auto lookup and convert: (Rate * 1000) / Exchange Rate
+    overhead_val = (oh_rate * 1000 / ex_rate) if ex_rate > 0 else (oh_rate * 1000)
+    # Factory Expense: Auto from master and convert: (Rate * 1000) / Exchange Rate
+    factory_exp_val = (FACTORY_EXPENSE_DEFAULT * 1000 / ex_rate) if ex_rate > 0 else (FACTORY_EXPENSE_DEFAULT * 1000)
+    
+    # 6. Export Expense (Unit)
+    # Formula: ((Export Expense + Documents + ...)/Exchange Rate)/Quantity
+    unit_export_exp = 0.0
     if total_qty_all > 0 and ex_rate > 0:
         unit_export_exp = (total_export_exp_combined / total_qty_all) / ex_rate
-    else:
-        unit_export_exp = 0
-        
-    # 1.3 AR Interest = ((Selling Price * AR Interest Rate (%)) / 365) * AR Interest Day
-    unit_ar = ((selling * (ar_rate / 100)) / 365) * ar_days
     
-    # 1.4 RM Interest = ((Selling Price * RM Interest Rate (%)) / 365) * RM Interest Day
-    unit_rm_int = ((selling * (rm_rate / 100)) / 365) * rm_days
+    # Other components
+    c_pkg = row.get("PACKAGING", 0.0)
+    c_comm = row.get("Commision", 0.0)
+    c_ap = row.get("A&P", 0.0)
+    c_agree = row.get("Agreement", 0.0)
+    c_other = row.get("Other Cost", 0.0)
+    selling = row.get("Selling Price", 0.0)
+
+    # 7. Total Cost
+    # RM Net Yield+ PACKAGING+ Overhead+ Factory Expense+ Freight+ Export Expense+Commission+ A&P+Agreemen+ Other Cost
+    total_cost = (rm_net_yield + c_pkg + overhead_val + factory_exp_val + 
+                  unit_export_exp + c_comm + c_ap + c_agree + c_other)
     
-    # 1.5 WH Storage = 30 * WH Storage Day * (Quantity / 1000)
-    unit_wh = 30 * wh_days * (qty / 1000)
-    
-    # Total Cost = RM Net Yield + PACKAGING + Overhead + Factory Expense + Export Expense + Commission + A&P + Agreement + Other Cost
-    total_cost = rm_net_yield + c_pkg + c_ovh + c_fac + unit_export_exp + c_commission + c_ap + c_agreement + c_other_cost
-    
-    # Margin Cost = Selling Price - Total Cost
+    # 8. MarginCost
     margin_cost = selling - total_cost
     
-    # Margin Cost After = Margin Cost - AR Interest - RM Interest - WH Storage
-    margin_cost_after = margin_cost - unit_ar - unit_rm_int - unit_wh
+    # 9. Interests (Per Unit) - Based on Master Calculator.xlsx formulas
+    # AR Interest Formula: =(Selling_Price * AR_Rate% / 365) * AR_Days
+    # RM Interest Formula: =(Selling_Price * RM_Rate% / 365) * RM_Days
+    unit_ar_int = (selling * (ar_rate / 100) / 365) * ar_days if ar_days > 0 else 0.0
+    unit_rm_int = (selling * (rm_rate / 100) / 365) * rm_days if rm_days > 0 else 0.0
     
+    # WH Storage Formula: =(30 * (30/30) * Quantity) / Exchange Rate
+    # Per Unit: (30 * (30/30)) / Exchange Rate = 30 / Exchange Rate
+    # Total: (30 * (30/30) * Quantity) / Exchange Rate
+    unit_wh_storage = (30 * (30/30)) / ex_rate if ex_rate > 0 else 0.0
+    total_wh_storage = (30 * (30/30) * qty) / ex_rate if (qty > 0 and ex_rate > 0) else 0.0
+    
+    # 10. Margin After (Per Unit) - Following Excel: MarginCost - AR Interest - RM Interest - WH Storage
+    # Note: Excel uses WH Storage TOTAL in per-unit calculation (as per Master Calculator.xlsx)
+    margin_after_unit = margin_cost - unit_ar_int - unit_rm_int - total_wh_storage
+    
+    # Also calculate totals for reference
+    total_ar_int = unit_ar_int * qty
+    total_rm_int = unit_rm_int * qty
+    margin_after_total = margin_after_unit * qty
+
     results.append({
         "Item": row["Item"],
         "Product Name": row["Product Name"],
-        "Product RM": row["Product RM"],
-        "ราคา RM": round(c_rm, 4),
-        "Yield loss": round(yield_loss, 4),
-        "Yield loss %": yield_loss_pct,
+        "Product RM": prod_rm,
+        "RM Price": round(rm_price, 4),
+        "Group (0-6)": g_num,
+        "Yield loss %": y_loss_pct,
+        "Yield loss": round(yield_loss_cost, 4),
+        "BP": round(bp_val, 4),
         "RM Net Yield": round(rm_net_yield, 4),
-        "PACKAGING": round(c_pkg, 4),
-        "Group": row.get("Group", 0),
-        "Overhead": round(c_ovh, 4),
+        "PACKAGING": c_pkg,
+        "Brand": row["Brand"],
+        "Pack Size": row["Pack Size"],
+        "Overhead": round(overhead_val, 4),
         "Quantity": qty,
-        "Factory Expense": round(c_fac, 4),
+        "Factory Expense": round(factory_exp_val, 4),
         "Export Expense": round(unit_export_exp, 4),
-        "Commision": c_commission,
+        "Commision": c_comm,
         "A&P": c_ap,
-        "Agreement": c_agreement,
-        "Other Cost": c_other_cost,
+        "Agreement": c_agree,
+        "Other Cost": c_other,
         "Total Cost": round(total_cost, 4),
         "Selling Price": selling,
-        "MarginCost": round(margin_cost, 4),
-        "AR Interest": round(unit_ar, 4),
-        "RM Interest": round(unit_rm_int, 4),
-        "WH Storage": round(unit_wh, 4),
-        "MarginCost After": round(margin_cost_after, 4)
+        "MarginCost (Unit)": round(margin_cost, 4),
+        "AR Interest (Total)": round(total_ar_int, 4),
+        "RM Interest (Total)": round(total_rm_int, 4),
+        "WH Storage (Total)": round(total_wh_storage, 4),
+        "Margin After (Total)": round(margin_after_total, 4)
     })
+
 
 summary_df = pd.DataFrame(results)
 

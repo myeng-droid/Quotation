@@ -7,7 +7,7 @@
 -- DROP TABLE IF EXISTS master_ports CASCADE;
 -- DROP TABLE IF EXISTS master_overhead CASCADE;
 -- DROP TABLE IF EXISTS master_factory_expense CASCADE;
--- DROP TABLE IF EXISTS master_yield_loss CASCADE;
+-- DROP TABLE IF EXISTS master_yield_loss CASCADE; (DELETED - merged into master_overhead)
 
 -- Table: master_customers
 CREATE TABLE IF NOT EXISTS master_customers (
@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS master_overhead (
     id SERIAL PRIMARY KEY,
     group_number INTEGER NOT NULL UNIQUE,
     overhead_rate DECIMAL(10,4),
+    yield_loss_percent DECIMAL(10,4) DEFAULT 0.0, -- New Column
     description TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -75,14 +76,7 @@ CREATE TABLE IF NOT EXISTS master_factory_expense (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Table: master_yield_loss
-CREATE TABLE IF NOT EXISTS master_yield_loss (
-    id SERIAL PRIMARY KEY,
-    group_number INTEGER NOT NULL,
-    yield_loss_percent DECIMAL(10,4),
-    description TEXT,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
+-- Table: master_yield_loss (DELETED - merged into master_overhead)
 
 -- Table: shipping_rates
 CREATE TABLE IF NOT EXISTS shipping_rates (
@@ -101,7 +95,60 @@ CREATE INDEX IF NOT EXISTS idx_customers_name ON master_customers(customer_name)
 CREATE INDEX IF NOT EXISTS idx_ports_name ON master_ports(main_port_name);
 CREATE INDEX IF NOT EXISTS idx_ports_country ON master_ports(country_code);
 CREATE INDEX IF NOT EXISTS idx_overhead_group ON master_overhead(group_number);
-CREATE INDEX IF NOT EXISTS idx_yield_loss_group ON master_yield_loss(group_number);
+-- idx_yield_loss_group (DELETED)
 
--- If you need to alter existing port table:
--- ALTER TABLE master_ports ALTER COLUMN country_code TYPE VARCHAR(50);
+-- Table: master_input (Structure for Section 4)
+CREATE TABLE IF NOT EXISTS master_input (
+    id SERIAL PRIMARY KEY,
+    item_no INTEGER,
+    product_name TEXT,
+    product_rm TEXT,
+    rm_price DECIMAL(10,4),
+    group_no INTEGER,
+    yield_loss_pct DECIMAL(10,4),
+    yield_loss_cost DECIMAL(10,4),
+    bp DECIMAL(10,4),
+    rm_net_yield DECIMAL(10,4),
+    packaging DECIMAL(10,4),
+    brand TEXT,
+    pack_size TEXT,
+    overhead DECIMAL(10,4),
+    quantity DECIMAL(10,4),
+    factory_expense DECIMAL(10,4),
+    freight DECIMAL(10,4),
+    export_expense DECIMAL(10,4),
+    commision DECIMAL(10,4),
+    ap DECIMAL(10,4),
+    agreement DECIMAL(10,4),
+    other_cost DECIMAL(10,4),
+    total_cost DECIMAL(10,4),
+    selling_price DECIMAL(10,4),
+    margin_cost DECIMAL(10,4),
+    ar_interest DECIMAL(10,4),
+    rm_interest DECIMAL(10,4),
+    wh_storage DECIMAL(10,4),
+    margin_cost_after DECIMAL(10,4),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Table: master_calculator (Specs for calculations)
+CREATE TABLE IF NOT EXISTS master_calculator (
+    id SERIAL PRIMARY KEY,
+    topic TEXT,
+    method TEXT,
+    example TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Table: master_rm_cost (Raw Material Prices)
+CREATE TABLE IF NOT EXISTS master_rm_cost (
+    id SERIAL PRIMARY KEY,
+    product TEXT NOT NULL,
+    price DECIMAL(10,4) NOT NULL,
+    update_date DATE NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- If you need to migrate existing table (Manual Step):
+-- ALTER TABLE master_overhead ADD COLUMN IF NOT EXISTS yield_loss_percent DECIMAL(10,4) DEFAULT 0.0;
+-- DROP TABLE IF EXISTS master_yield_loss;

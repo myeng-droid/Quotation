@@ -71,12 +71,6 @@ def fetch_factory_expense():
     return response.data
 
 
-@st.cache_data(ttl=3600)
-def fetch_yield_loss():
-    """Fetch yield loss percentages from Supabase."""
-    client = get_postgrest_client()
-    response = client.from_("master_yield_loss").select("*").execute()
-    return response.data
 
 
 @st.cache_data(ttl=3600)
@@ -84,6 +78,22 @@ def fetch_shipping_rates():
     """Fetch tiered shipping rates from Supabase."""
     client = get_postgrest_client()
     response = client.from_("shipping_rates").select("*").order("min_qty").execute()
+    return response.data
+
+
+@st.cache_data(ttl=3600)
+def fetch_rm_costs():
+    """Fetch RM costs from Supabase."""
+    client = get_postgrest_client()
+    response = client.from_("master_rm_cost").select("*").order("update_date", desc=True).execute()
+    return response.data
+
+
+@st.cache_data(ttl=3600)
+def fetch_calculator_specs():
+    """Fetch calculator specifications from Supabase."""
+    client = get_postgrest_client()
+    response = client.from_("master_calculator").select("*").order("id").execute()
     return response.data
 
 
@@ -97,9 +107,9 @@ def get_overhead_by_group(group_number: int) -> float:
 
 
 def get_yield_loss_by_group(group_number: int) -> float:
-    """Get yield loss percentage for a specific group number."""
-    yield_losses = fetch_yield_loss()
-    for item in yield_losses:
+    """Get yield loss percentage for a specific group number from master_overhead."""
+    overheads = fetch_overhead()
+    for item in overheads:
         if item.get('group_number') == group_number:
-            return item.get('yield_loss_percent', 0.0)
+            return float(item.get('yield_loss_percent', 0.0))
     return 0.0
