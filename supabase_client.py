@@ -11,28 +11,26 @@ import streamlit as st
 # Load environment variables
 load_dotenv()
 
-# Supabase configuration
-# Prioritize Streamlit Secrets, fallback to environment variables
-SUPABASE_URL = st.secrets.get("SUPABASE_URL") or os.getenv("SUPABASE_URL")
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY") or os.getenv("SUPABASE_KEY")
-
-
 def get_postgrest_client() -> SyncPostgrestClient:
     """Get a PostgREST client for Supabase database operations."""
-    if not SUPABASE_URL or not SUPABASE_KEY:
+    # Prioritize Streamlit Secrets, fallback to environment variables
+    url = st.secrets.get("SUPABASE_URL") or os.getenv("SUPABASE_URL")
+    key = st.secrets.get("SUPABASE_KEY") or os.getenv("SUPABASE_KEY")
+
+    if not url or not key:
         error_msg = (
             "SUPABASE_URL and SUPABASE_KEY are missing. "
-            "Local: Set in .env file. "
-            "Streamlit Cloud: Set in App Settings -> Secrets."
+            "Local: Check .env file. "
+            "Streamlit Cloud: Go to Settings -> Secrets and add them in TOML format."
         )
         raise ValueError(error_msg)
     
-    rest_url = f"{SUPABASE_URL}/rest/v1"
+    rest_url = f"{url}/rest/v1"
     return SyncPostgrestClient(
         rest_url,
         headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}"
+            "apikey": key,
+            "Authorization": f"Bearer {key}"
         }
     )
 
