@@ -390,22 +390,22 @@ with r2:
         fetched_rate = get_yahoo_rate(target_ticker)
         if fetched_rate:
             st.session_state['spot_val'] = fetched_rate
-            st.success(f"Fetched: {fetched_rate:.4f}")
+            st.success(f"Fetched: {fetched_rate:.2f}")
             
     # Use session state for spot rate
     if 'spot_val' not in st.session_state:
         st.session_state['spot_val'] = 34.00
     
-    spot_rate = st.number_input("Spot Rate", value=st.session_state['spot_val'], format="%.4f")
+    spot_rate = st.number_input("Spot Rate", value=st.session_state['spot_val'], format="%.2f")
 
 with r3:
-    discount_rate = st.number_input("(-) Discount Rate", value=0.00, format="%.4f")
+    discount_rate = st.number_input("(-) Discount Rate", value=0.00, format="%.2f")
 with r4:
-    premium_rate = st.number_input("(+) Premium Rate", value=0.50, format="%.4f")
+    premium_rate = st.number_input("(+) Premium Rate", value=0.50, format="%.2f")
 with r5:
     # Auto-calc
     default_ex = spot_rate - discount_rate + premium_rate
-    ex_rate = st.number_input("Exchange Rate", value=default_ex, format="%.4f")
+    ex_rate = st.number_input("Exchange Rate", value=default_ex, format="%.2f")
 
 # Destination Section (4 destinations)
 st.markdown("##### Destination")
@@ -596,15 +596,15 @@ column_cfg = {
     "Product Name": st.column_config.TextColumn(width="medium"),
     "Product RM": st.column_config.SelectboxColumn(options=RM_LIST, width="medium"),
     "Group": st.column_config.SelectboxColumn(options=[0,1,2,3,4,5,6], width="small", help="Overhead Group (0-6)"),
-    "PACKAGING": st.column_config.NumberColumn(format="%.4f", width="small"),
+    "PACKAGING": st.column_config.NumberColumn(format="%.2f", width="small"),
     "Brand": st.column_config.TextColumn(width="small"),
     "Pack Size": st.column_config.TextColumn(width="small"),
     "Quantity": st.column_config.NumberColumn(format="%.2f", width="small"),
-    "Commision": st.column_config.NumberColumn(format="%.4f", width="small"),
-    "A&P": st.column_config.NumberColumn(format="%.4f", width="small"),
-    "Agreement": st.column_config.NumberColumn(format="%.4f", width="small"),
-    "Other Cost": st.column_config.NumberColumn(format="%.4f", width="small"),
-    "Selling Price": st.column_config.NumberColumn(format="%.4f", width="small")
+    "Commision": st.column_config.NumberColumn(format="%.2f", width="small"),
+    "A&P": st.column_config.NumberColumn(format="%.2f", width="small"),
+    "Agreement": st.column_config.NumberColumn(format="%.2f", width="small"),
+    "Other Cost": st.column_config.NumberColumn(format="%.2f", width="small"),
+    "Selling Price": st.column_config.NumberColumn(format="%.2f", width="small")
 }
 
 # Apply auto-lookup: Update Overhead based on Group selection
@@ -742,30 +742,30 @@ for index, row in edited_df.iterrows():
         "Item": row["Item"],
         "Product Name": row["Product Name"],
         "Product RM": prod_rm,
-        "RM Price": round(rm_price, 4),
+        "RM Price": round(rm_price, 2),
         "Group (0-6)": g_num,
         "Yield loss %": y_loss_pct,
-        "Yield loss": round(yield_loss_cost, 4),
-        "BP": round(bp_val, 4),
-        "RM Net Yield": round(rm_net_yield, 4),
+        "Yield loss": round(yield_loss_cost, 2),
+        "BP": round(bp_val, 2),
+        "RM Net Yield": round(rm_net_yield, 2),
         "PACKAGING": c_pkg,
         "Brand": row["Brand"],
         "Pack Size": row["Pack Size"],
-        "Overhead": round(overhead_val, 4),
+        "Overhead": round(overhead_val, 2),
         "Quantity": qty,
-        "Factory Expense": round(factory_exp_val, 4),
-        "Export Expense": round(unit_export_exp, 4),
+        "Factory Expense": round(factory_exp_val, 2),
+        "Export Expense": round(unit_export_exp, 2),
         "Commision": c_comm,
         "A&P": c_ap,
         "Agreement": c_agree,
         "Other Cost": c_other,
-        "Total Cost": round(total_cost, 4),
+        "Total Cost": round(total_cost, 2),
         "Selling Price": selling,
-        "MarginCost (Unit)": round(margin_cost, 4),
-        "AR Interest (Unit)": round(unit_ar_int, 4),
-        "RM Interest (Unit)": round(unit_rm_int, 4),
-        "WH Storage (Total)": round(total_wh_storage, 4),
-        "Margin After (Unit)": round(margin_after_unit, 4)
+        "MarginCost (Unit)": round(margin_cost, 2),
+        "AR Interest (Unit)": round(unit_ar_int, 2),
+        "RM Interest (Unit)": round(unit_rm_int, 2),
+        "WH Storage (Total)": round(total_wh_storage, 2),
+        "Margin After (Unit)": round(margin_after_unit, 2)
     })
 
 
