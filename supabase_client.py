@@ -196,3 +196,31 @@ def delete_quotation(quotation_id: str):
     # Supabase cascade delete should handle the relations if set up, 
     # but our migration script said 'ON DELETE CASCADE', so we just delete header.
     client.from_("trx_general_infos").delete().eq("id", quotation_id).execute()
+def get_next_doc_no_sequence(prefix: str) -> int:
+    """
+    Get the next sequence number for a given Document No. prefix (e.g. CS20260212-).
+    """
+    client = get_postgrest_client()
+    # Find all documents starting with the prefix
+    response = client.from_("trx_general_infos") \
+        .select("doc_no") \
+        .like("doc_no", f"{prefix}%") \
+        .execute()
+    
+    if not response.data:
+        return 1
+    
+    # Extract the sequence part and find the max
+    sequences = []
+    for item in response.data:
+        try:
+            # Assuming format prefixXXXX where prefix is like CS20260212-
+            seq_str = item['doc_no'].replace(prefix, "")
+            sequences.append(int(seq_str))
+        except:
+            continue
+            
+    if not sequences:
+        return 1
+        
+    return max(sequences) + 1

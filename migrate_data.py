@@ -61,11 +61,12 @@ def truncate_table(table_name):
     client = get_client()
     try:
         # PostgREST doesn't support TRUNCATE directly easily, so we use DELETE
-        # Need to ensure RLS allows delete or use service_role key if available
-        # Here we try to delete all records
         client.from_(table_name).delete().neq("id", -1).execute()
     except Exception as e:
-        print(f"  [WARNING] Could not clear {table_name}: {e}")
+        if "PGRST205" in str(e):
+            print(f"  [CRITICAL] Table '{table_name}' does not exist in Supabase! Please create it first.")
+        else:
+            print(f"  [WARNING] Could not clear {table_name}: {e}")
 
 
 def migrate_customers():
@@ -172,29 +173,40 @@ def migrate_ports():
 
 
 def migrate_overhead():
-    """Migrate overhead data from Master.xlsx to Supabase."""
+    """Migrate overhead data and yield loss from Master.xlsx to Supabase."""
     truncate_table("master_overhead")
-    print("[OVERHEAD] Migrating overhead rates...")
+    print("[OVERHEAD] Migrating overhead rates (including yield loss)...")
     try:
-        df = pd.read_excel("Master.xlsx", sheet_name='Overhead', header=None)
+        # Load Overhead rates
+        df_oh = pd.read_excel("Master.xlsx", sheet_name='Overhead', header=None)
+        
+        # Load Yield Loss percentages
+        df_yield = pd.read_excel("Master.xlsx", sheet_name='Yield Loss %')
+        df_yield.columns = ['group_number', 'yield_loss_percent']
+        yield_map = {int(r['group_number']): float(r['yield_loss_percent']) 
+                     for _, r in df_yield.dropna().iterrows()}
+
         data_rows = []
         # Based on inspection, data rows for Group 0-6 are at indices 3 to 9
         for idx in range(3, 10):
             try:
-                group_val = df.iloc[idx, 0] # Group is in col 0
-                ovh_val = df.iloc[idx, 1]   # Overhead is in col 1
+                group_val = df_oh.iloc[idx, 0] # Group is in col 0
+                ovh_val = df_oh.iloc[idx, 1]   # Overhead is in col 1
                 if pd.notna(group_val):
+                    g_num = int(group_val)
                     data_rows.append({
-                        'group_number': int(group_val), 
-                        'overhead_rate': float(ovh_val) if pd.notna(ovh_val) else 0.0
+                        'group_number': g_num, 
+                        'overhead_rate': float(ovh_val) if pd.notna(ovh_val) else 0.0,
+                        'yield_loss_percent': yield_map.get(g_num, 0.0)
                     })
             except Exception as e:
                 print(f"  [SKIP] Row {idx}: {e}")
                 continue
+        
         if data_rows:
             get_client().from_("master_overhead").insert(data_rows).execute()
-        print(f"[DONE] Overhead: {len(data_rows)} uploaded")
-    except Exception as e: print(f"[ERROR] Overhead: {e}")
+        print(f"[DONE] Overhead & Yield Loss: {len(data_rows)} uploaded")
+    except Exception as e: print(f"[ERROR] Overhead Migration: {e}")
 
 
 def migrate_factory_expense():
@@ -209,19 +221,6 @@ def migrate_factory_expense():
     except Exception as e: print(f"[ERROR] Factory: {e}")
 
 
-def migrate_yield_loss():
-    """Migrate yield loss percentage data from Master.xlsx to Supabase."""
-    truncate_table("master_yield_loss")
-    print("[YIELD] Migrating yield loss...")
-    try:
-        df = pd.read_excel("Master.xlsx", sheet_name='Yield Loss %')
-        df.columns = ['group_number', 'yield_loss_percent']
-        records = [{'group_number': int(r['group_number']), 'yield_loss_percent': float(r['yield_loss_percent'])} 
-                   for _, r in df.dropna().iterrows()]
-        if records:
-            get_client().from_("master_yield_loss").insert(records).execute()
-        print(f"[DONE] Yield Loss: {len(records)} uploaded")
-    except Exception as e: print(f"[ERROR] Yield Loss: {e}")
 
 
 def migrate_shipping_rates():
@@ -248,6 +247,57 @@ def migrate_shipping_rates():
         print(f"[ERROR] Shipping Rates: {e}")
 
 
+def migrate_rm_costs():
+    """Migrate RM costs from Master/MasterRMCost.xlsx to Supabase."""
+    truncate_table("master_rm_cost")
+    print("[RM COST] Migrating RM costs...")
+    try:
+        df = pd.read_excel("Master/MasterRMCost.xlsx")
+        # Columns: Product, Price, Update
+        records = []
+        for _, row in df.iterrows():
+            if pd.isna(row['Product']) or pd.isna(row['Price']):
+                continue
+            update_date = pd.to_datetime(row['Update'])
+            records.append({
+                'product': str(row['Product']),
+                'price': float(row['Price']),
+                'update_date': update_date.strftime('%Y-%m-%d')
+            })
+        
+        if records:
+            # Upload in batches
+            client = get_client()
+            for i in range(0, len(records), 100):
+                batch = records[i:i+100]
+                client.from_("master_rm_cost").insert(batch).execute()
+        print(f"[DONE] RM Costs: {len(records)} uploaded")
+    except Exception as e:
+        print(f"[ERROR] RM Costs: {e}")
+
+
+def migrate_calculator():
+    """Migrate Calculator specs from Master/Master Calculator.xlsx to Supabase."""
+    truncate_table("master_calculator")
+    print("[CALCULATOR] Migrating specs...")
+    try:
+        df = pd.read_excel("Master/Master Calculator.xlsx")
+        # Columns: หัวข้อ, วิธีทำงาน, ตัวอย่าง
+        records = []
+        for _, row in df.iterrows():
+            records.append({
+                'topic': str(row.iloc[0]),
+                'method': str(row.iloc[1]),
+                'example': str(row.iloc[2]) if len(row) > 2 else ""
+            })
+        
+        if records:
+            get_client().from_("master_calculator").insert(records).execute()
+        print(f"[DONE] Calculator Specs: {len(records)} uploaded")
+    except Exception as e:
+        print(f"[ERROR] Calculator Specs: {e}")
+
+
 def main():
     print("=" * 50); print("Starting Master Data Migration to Supabase"); print("=" * 50)
     if not SUPABASE_URL or not SUPABASE_KEY: return
@@ -256,8 +306,10 @@ def main():
     migrate_ports()
     migrate_overhead()
     migrate_factory_expense()
-    migrate_yield_loss()
+    # migrate_yield_loss() (DELETED - merged into overhead)
     migrate_shipping_rates()
+    migrate_rm_costs()
+    migrate_calculator()
     print("=" * 50); print("Migration Complete!"); print("=" * 50)
 
 if __name__ == "__main__":

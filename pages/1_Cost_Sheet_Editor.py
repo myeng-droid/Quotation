@@ -7,17 +7,20 @@ import yfinance as yf
 from supabase_client import (
     fetch_customers, fetch_currencies, fetch_ports, fetch_overhead, 
     fetch_factory_expense, fetch_shipping_rates, fetch_rm_costs, fetch_calculator_specs,
-    get_overhead_by_group, get_yield_loss_by_group
+    get_overhead_by_group, get_yield_loss_by_group, get_next_doc_no_sequence
 )
 
+
+# --- AUTH CHECK ---
+
+# --- PAGE CONFIG ---
+st.set_page_config(page_title="Cost Sheet System", layout="wide", page_icon="📝")
 
 # --- AUTH CHECK ---
 if st.session_state.get('authentication_status') is not True:
     st.error("Please login from the Home page.")
     st.stop()
 
-# --- PAGE CONFIG ---
-st.set_page_config(page_title="Cost Sheet System", layout="wide", page_icon="📝")
 
 # Custom CSS for Professional UI
 st.markdown("""
@@ -323,6 +326,17 @@ def get_shipping_rate(qty):
         return float(SHIPPING_RATES[-1]['price_per_container'])
     return 1400.0 # Standard fallback
 
+def generate_default_doc_no():
+    """Generates CSYYYYMMDD-XXXX based on current count in DB."""
+    today_str = datetime.now().strftime('%Y%m%d')
+    prefix = f"CS{today_str}-"
+    try:
+        next_seq = get_next_doc_no_sequence(prefix)
+        return f"{prefix}{next_seq:04d}"
+    except Exception as e:
+        print(f"Error generating doc_no: {e}")
+        return f"{prefix}0001"
+
 # --- UI START ---
 st.title("📝 Cost Sheet Management System")
 
@@ -333,7 +347,7 @@ st.markdown('<div class="section-header">1. ข้อมูลทั่วไป
 # Row 1: Document & Trader & Team
 c1_1, c1_2, c1_3, c1_4 = st.columns(4)
 with c1_1:
-    doc_no = st.text_input("Document No.", value="CS260115-0001")
+    doc_no = st.text_input("Document No.", value=generate_default_doc_no())
     trader_name = st.text_input("ชื่อ Trader")
 with c1_2:
     doc_date = st.date_input("Document Date (Conclude)", value=date.today())
@@ -348,7 +362,7 @@ with c1_4:
 
 c5, c6 = st.columns(2)
 with c5:
-    ship_from = st.date_input("Shipment Date from", value=date(2026, 5, 15))
+    ship_from = st.date_input("Shipment Date from", value=doc_date)
 with c6:
     ship_to = st.date_input("Shipment Date to", value=date(2026, 5, 30))
 
@@ -413,6 +427,19 @@ with dest_col4:
 st.markdown('<div class="section-header">2. ค่าใช้จ่ายส่งออก (Export Expense & Freight)</div>', unsafe_allow_html=True)
 st.markdown('<div class="warning-text">⚠️ Export Expense** ค่าใช้จ่าย Export Expense เป็นค่าใช้จ่ายตามมาตรฐาน สามารถปรับได้ตามเกิดขึ้นจริง</div>', unsafe_allow_html=True)
 
+# Insurance Section
+st.write("**Insurance**")
+ins_type = st.radio("เงื่อนไขประกัน", [
+    "Non Africa: FOB/CFR (125% x Selling Price x 0.000098)", 
+    "Non Africa: CIF (110% x Selling Price x 0.00049)",
+    "Africa: FOB/CFR (125% x Selling Price x 0.000446)",
+    "Africa: CIF (110% x Selling Price x 0.00223)"
+], horizontal=True)
+
+# Placeholder for calculated insurance display
+ins_display = st.empty()
+st.write("---")
+
 # Container & Invoice Info
 col_size, col_cnt, col_inv, col_ton = st.columns([1.5, 1, 1, 1])
 with col_size:
@@ -443,12 +470,7 @@ with e_col1:
     v_survey_check = st.number_input("ค่าตรวจสอบ + รมยา (1,050 บาท/ตู้)", value=float(container_qty * 1050))
     v_survey_vehicle = st.number_input("ค่าพาหนะไปรมยา (1,350 บาท/Inv)", value=float(invoice_qty * 1350))
     
-    st.write("**Insurance**")
-    ins_type = st.radio("เงื่อนไขประกัน", [
-        "FOB/CFR (ตามเงื่อนไขการชำระ) (125% ต่อราคาขาย x 0.000098)", 
-        "CIF (ตามเงื่อนไขการชำระ) (110% ต่อราคาขาย x 0.00049)"
-    ], horizontal=True)
-    v_insurance = st.number_input("ค่าเบี้ยประกันส่งออก (Insurance)", value=0.0)
+
 
 with e_col2:
     st.write("**Port Charges (ค่าระวางส่งออก)**")
@@ -479,14 +501,14 @@ if 'other_expenses_data' not in st.session_state:
         other_exp_init.append({
             "ลำดับ": i + 1,
             "รายการค่าใช้จ่าย": "",
-            "จำนวนเงิน (บาท)": 0.0
+            "จำนวนเงิน (USD/Ton)": 0.0
         })
     st.session_state.other_expenses_data = pd.DataFrame(other_exp_init)
 
 other_exp_cfg = {
     "ลำดับ": st.column_config.NumberColumn(disabled=True, width="small"),
     "รายการค่าใช้จ่าย": st.column_config.TextColumn(width="large"),
-    "จำนวนเงิน (บาท)": st.column_config.NumberColumn(format="%.2f", width="medium")
+    "จำนวนเงิน (USD/Ton)": st.column_config.NumberColumn(format="%.2f", width="medium")
 }
 
 other_expenses_df = st.data_editor(
@@ -499,15 +521,12 @@ other_expenses_df = st.data_editor(
 )
 
 # Calculate total other expenses
-other_expense_value = other_expenses_df["จำนวนเงิน (บาท)"].sum()
+other_expense_value = other_expenses_df["จำนวนเงิน (USD/Ton)"].sum()
 
 # Calculate totals
 port_charges_total = v_thc + v_seal + v_bl_fee + v_handling
 survey_total = v_survey_check + v_survey_vehicle
 docs_total = v_doc_agri + v_doc_phyto + v_doc_health + v_doc_origin + v_doc_ms24 + v_doc_chamber + v_doc_dft
-
-total_exp_v2 = (v_freight + v_shipping + v_truck + survey_total + v_insurance + 
-                docs_total + v_doc_prep + port_charges_total + other_expense_value)
 
 # --- 3. Interest & Storage ---
 st.markdown('<div class="section-header">3. ดอกเบี้ยและคลังสินค้า (Interest & WH Storage)</div>', unsafe_allow_html=True)
@@ -523,16 +542,16 @@ with i_col1:
     st.info(f"Payment Term (Auto): {p_term_auto}")
     
     p_term_ship = st.selectbox("Payment Term For Shipment", PAYMENT_LIST)
-    ar_rate = st.number_input("AR Interest Rate (%)", value=0.0, key="ar_r")
+    ar_rate = st.number_input("AR Interest Rate (%) (STD.2.4%)", value=0.0, key="ar_r")
     ar_days = st.number_input("AR Interest Day (วัน)", value=0, key="ar_d")
 
 with i_col2:
     st.write("**RM Interest & WH Storage**")
-    rm_rate = st.number_input("RM Interest Rate (%)", value=0.0, key="rm_r")
+    rm_rate = st.number_input("RM Interest Rate (%) (STD.2.5%)", value=0.0, key="rm_r")
     rm_days = st.number_input("RM Interest Day (วัน)", value=0, key="rm_d")
     
     st.write("---")
-    wh_days = st.number_input("WH Storage Day (วัน) (30 บาท/วัน/Ton)", value=30)
+    wh_days = st.number_input("WH Storage Day (วัน) (30 บาท/เดือน/Ton)", value=30)
     # Calculation for WH Storage: 30 THB / Ton / Month (Assume 30 days = 1 month)
     # Will calculate in final step based on total quantity
 
@@ -594,6 +613,9 @@ for idx in range(len(st.session_state.cost_data_v3)):
     st.session_state.cost_data_v3.loc[idx, "Overhead"] = OH_DATA.get(group_val, 0.0)
     st.session_state.cost_data_v3.loc[idx, "Factory Expense"] = FACTORY_EXPENSE_DEFAULT
 
+# Ensure stable order for Section 4
+st.session_state.cost_data_v3 = st.session_state.cost_data_v3.sort_values("Item")
+
 edited_df = st.data_editor(
     st.session_state.cost_data_v3,
     column_config=column_cfg,
@@ -602,6 +624,9 @@ edited_df = st.data_editor(
     hide_index=True, 
     key="cost_editor_v3"
 )
+
+# Keep session state in sync
+st.session_state.cost_data_v3 = edited_df
 
 # After editing, update Overhead based on new Group values
 for idx in edited_df.index:
@@ -612,8 +637,24 @@ for idx in edited_df.index:
 
 
 # --- CALCULATIONS BASED ON MASTER CALCULATOR ---
-results = []
 total_qty_all = edited_df["Quantity"].sum()
+results = []
+
+# Insurance Calculation Logic (Automated)
+# Moved here because it depends on edited_df (Products Table)
+ins_multipliers = {
+    "Non Africa: FOB/CFR (125% x Selling Price x 0.000098)": 1.25 * 0.000098,
+    "Non Africa: CIF (110% x Selling Price x 0.00049)": 1.10 * 0.00049,
+    "Africa: FOB/CFR (125% x Selling Price x 0.000446)": 1.25 * 0.000446,
+    "Africa: CIF (110% x Selling Price x 0.00223)": 1.10 * 0.00223
+}
+
+multiplier = ins_multipliers.get(ins_type, 0.0)
+total_selling_thb = (edited_df["Selling Price"] * edited_df["Quantity"]).sum() * ex_rate
+v_insurance = total_selling_thb * multiplier
+
+# Update the display in Section 2 (using placeholder defined earlier)
+ins_display.info(f"**ค่าเบี้ยประกันส่งออก (Insurance) คำนวณอัตโนมัติ:** {v_insurance:,.2f} บาท")
 
 # Total Export Expenses Combined (THB)
 total_export_exp_combined = (v_freight + v_shipping + v_truck + survey_total + v_insurance + 
@@ -678,22 +719,21 @@ for index, row in edited_df.iterrows():
     margin_cost = selling - total_cost
     
     # 9. Interests (Per Unit) - Based on Master Calculator.xlsx formulas
-    # AR Interest Formula: =(Selling_Price * AR_Rate% / 365) * AR_Days
-    # RM Interest Formula: =(Selling_Price * RM_Rate% / 365) * RM_Days
+    # Formula: ((Selling Price * Rate %) / 365) * Days
     unit_ar_int = (selling * (ar_rate / 100) / 365) * ar_days if ar_days > 0 else 0.0
     unit_rm_int = (selling * (rm_rate / 100) / 365) * rm_days if rm_days > 0 else 0.0
     
-    # WH Storage Formula: =(30 * (30/30) * Quantity) / Exchange Rate
-    # Per Unit: (30 * (30/30)) / Exchange Rate = 30 / Exchange Rate
-    # Total: (30 * (30/30) * Quantity) / Exchange Rate
-    unit_wh_storage = (30 * (30/30)) / ex_rate if ex_rate > 0 else 0.0
-    total_wh_storage = (30 * (30/30) * qty) / ex_rate if (qty > 0 and ex_rate > 0) else 0.0
+    # 10. WH Storage (Total for the container/lot)
+    # Formula in Master Calculator: (WH Storage Day * Quantity * (30/30)) / Exchange Rate
+    # Note: (30/30) appears to be 1 Baht per Ton per Day.
+    total_wh_storage = (wh_days * qty * 1.0) / ex_rate if (qty > 0 and ex_rate > 0) else 0.0
     
-    # 10. Margin After (Per Unit) - Following Excel: MarginCost - AR Interest - RM Interest - WH Storage
-    # Note: Excel uses WH Storage TOTAL in per-unit calculation (as per Master Calculator.xlsx)
+    # 11. Margin After (Per Unit) - Following Excel formula exactly: 
+    # Formula: MarginCost - AR Interest - RM Interest - WH Storage
+    # Note: Excel subtracts the TOTAL storage from the UNIT margin.
     margin_after_unit = margin_cost - unit_ar_int - unit_rm_int - total_wh_storage
     
-    # Also calculate totals for reference
+    # Also calculate totals for the summary table
     total_ar_int = unit_ar_int * qty
     total_rm_int = unit_rm_int * qty
     margin_after_total = margin_after_unit * qty
@@ -722,10 +762,10 @@ for index, row in edited_df.iterrows():
         "Total Cost": round(total_cost, 4),
         "Selling Price": selling,
         "MarginCost (Unit)": round(margin_cost, 4),
-        "AR Interest (Total)": round(total_ar_int, 4),
-        "RM Interest (Total)": round(total_rm_int, 4),
+        "AR Interest (Unit)": round(unit_ar_int, 4),
+        "RM Interest (Unit)": round(unit_rm_int, 4),
         "WH Storage (Total)": round(total_wh_storage, 4),
-        "Margin After (Total)": round(margin_after_total, 4)
+        "Margin After (Unit)": round(margin_after_unit, 4)
     })
 
 
@@ -794,6 +834,9 @@ loading_cfg = {
     "หมายเหตุ": st.column_config.TextColumn(width="medium")
 }
 
+# Ensure stable order for Loading Table
+st.session_state.loading_data = st.session_state.loading_data.sort_values("No.")
+
 loading_df = st.data_editor(
     st.session_state.loading_data,
     column_config=loading_cfg,
@@ -802,6 +845,9 @@ loading_df = st.data_editor(
     hide_index=True,
     key="loading_editor"
 )
+
+# Keep session state in sync
+st.session_state.loading_data = loading_df
 
 # --- Save Section ---
 st.markdown("---")
@@ -900,10 +946,10 @@ if st.button("Save to Database", type="primary"):
                 "total_cost": r["Total Cost"],
                 "selling_price": r["Selling Price"],
                 "margin_cost": r["MarginCost (Unit)"],
-                "ar_interest": r["AR Interest (Total)"] / r["Quantity"] if r["Quantity"] > 0 else 0,
-                "rm_interest": r["RM Interest (Total)"] / r["Quantity"] if r["Quantity"] > 0 else 0,
+                "ar_interest": r["AR Interest (Unit)"],
+                "rm_interest": r["RM Interest (Unit)"],
                 "wh_storage": r["WH Storage (Total)"],
-                "margin_after": r["Margin After (Total)"],
+                "margin_after": r["Margin After (Unit)"],
                 "status": "Draft"
             }
             production_costs.append(item)

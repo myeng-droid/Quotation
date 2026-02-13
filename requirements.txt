@@ -1,0 +1,6 @@
+streamlit
+pandas
+python-dotenv
+postgrest
+yfinance
+openpyxl
